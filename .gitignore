@@ -1,0 +1,76 @@
+# ---------------------------------------------------------------
+# Node / pnpm / Next.js
+# ---------------------------------------------------------------
+node_modules/
+.pnpm-store/
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+.turbo/
+.vercel/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Test & coverage output
+coverage/
+playwright-report/
+test-results/
+
+# ---------------------------------------------------------------
+# Rust / Tauri
+# ---------------------------------------------------------------
+target/
+**/src-tauri/gen/schemas/
+# Sidecar binaries (e.g. tectonic) are downloaded at build time
+**/src-tauri/binaries/
+
+# ---------------------------------------------------------------
+# Environment & secrets
+# ---------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---------------------------------------------------------------
+# LaTeX build artifacts (sample projects, manual testing)
+# ---------------------------------------------------------------
+*.aux
+*.bbl
+*.bcf
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.run.xml
+*.synctex.gz
+*.synctex(busy)
+*.toc
+*.xdv
+*.log
+# ...but keep test fixtures (e.g. sample compile logs for the log parser)
+!**/fixtures/**/*.log
+!**/fixtures/**/*.synctex.gz
+
+# Open Prism per-project app data
+.openprism/
+
+# ---------------------------------------------------------------
+# OS / editors
+# ---------------------------------------------------------------
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Local Claude Code settings
+.claude/settings.local.json
