@@ -1,0 +1,72 @@
+# Open Prism task runner — https://just.systems
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+api_port := env("OPENPRISM_PORT", "8787")
+web_port := env("WEB_PORT", "3737")
+api_url := "http://127.0.0.1:" + api_port
+tex_image := env("OPENPRISM_TEX_IMAGE", "texlive/texlive:latest")
+
+# List recipes
+default:
+    @just --list
+
+# Install web dependencies
+setup:
+    pnpm -C web install --frozen-lockfile
+
+# Download TeX Live as a Docker image (2.6 GB download, ~9 GB on disk; nothing installed on the host)
+tex-pull:
+    docker pull {{tex_image}}
+
+# Run the API and the web app in development mode (both on 127.0.0.1)
+dev: setup
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'kill 0' EXIT INT TERM
+    cargo build -p openprism-server
+    echo "Sign in at: http://127.0.0.1:{{web_port}}/login?token=$(./target/debug/open-prism-api print-token)"
+    ./target/debug/open-prism-api --port {{api_port}} &
+    OPENPRISM_API_URL={{api_url}} pnpm -C web exec next dev -H 127.0.0.1 -p {{web_port}} &
+    wait
+
+# Production build: release API binary + standalone Next.js server
+build: setup
+    cargo build --release -p openprism-server
+    pnpm -C web build
+    cp -r web/public web/.next/standalone/
+    cp -r web/.next/static web/.next/standalone/.next/
+
+# Run the production build locally (both on 127.0.0.1)
+start:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    trap 'kill 0' EXIT INT TERM
+    echo "Sign in at: http://127.0.0.1:{{web_port}}/login?token=$(./target/release/open-prism-api print-token)"
+    ./target/release/open-prism-api --port {{api_port}} &
+    (cd web/.next/standalone && OPENPRISM_API_URL={{api_url}} PORT={{web_port}} HOSTNAME=127.0.0.1 node server.js) &
+    wait
+
+# Print the access token
+token:
+    @cargo run -q -p openprism-server -- print-token
+
+# Run all tests
+test:
+    cargo test --workspace
+    pnpm -C web typecheck
+
+# Lint everything (what CI runs)
+lint:
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets -- -D warnings
+    pnpm -C web exec biome ci .
+    pnpm -C web typecheck
+
+# Format everything
+fmt:
+    cargo fmt --all
+    pnpm -C web exec biome check --write .
+
+# Regenerate TypeScript types from Rust (web/lib/api/types)
+gen-types:
+    cargo test --workspace export_bindings

@@ -1,0 +1,4 @@
+# ts-rs: `cargo test export_bindings` writes TypeScript types for the web app here.
+[env]
+TS_RS_EXPORT_DIR = { value = "web/lib/api/types", relative = true }
+TS_RS_LARGE_INT = "number"
