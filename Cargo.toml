@@ -1,0 +1,45 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/nttung245/open-prism"
+publish = false
+
+[workspace.dependencies]
+openprism-core = { path = "crates/core" }
+openprism-ai = { path = "crates/ai" }
+openprism-literature = { path = "crates/literature" }
+
+anyhow = "1"
+axum = "0.8"
+axum-extra = { version = "0.12", features = ["cookie"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+dirs = "7"
+getrandom = "0.4"
+hex = "0.4"
+hmac = "0.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+subtle = "2.6"
+thiserror = "2"
+time = "0.3"
+tokio = { version = "1.54", features = ["macros", "rt-multi-thread", "net", "signal", "process", "fs", "time", "io-util"] }
+tower = "0.5"
+tower-http = { version = "0.7", features = ["trace", "request-id", "util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ts-rs = "12"
+which = "8"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
