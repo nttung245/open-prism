@@ -22,7 +22,8 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
 
 ```
 browser ──► Next.js server (Node 22, :3737) ──/api/*──► open-prism-api (Rust, 127.0.0.1:8787)
-            pages, editor UI, API proxy                  projects, compilation (latexmk / Tectonic),
+            pages, editor UI, API proxy                  projects, compilation (TeX Live in Docker,
+                                                         or native latexmk / Tectonic),
                                                          SyncTeX, AI (any provider), literature
 ```
 
@@ -40,10 +41,16 @@ The API only listens on `127.0.0.1`. The Next.js server is the single entry poin
 ## Development
 
 Requirements: Rust 1.98 (installed automatically from `rust-toolchain.toml`), Node.js 22+,
-pnpm 12, [just](https://just.systems), and TeX Live (`latexmk`) or
-[Tectonic](https://tectonic-typesetting.github.io/) for compiling documents.
+pnpm 12 and [just](https://just.systems).
+
+To compile documents you need TeX. The simplest option is [Docker](https://docs.docker.com/get-docker/):
+`just tex-pull` downloads the official [TeX Live image](https://hub.docker.com/r/texlive/texlive)
+(every package; a 2.6 GB download, about 9 GB on disk), and compilation then runs in a
+throwaway container without network access. A native TeX Live (`latexmk`) or
+[Tectonic](https://tectonic-typesetting.github.io/) installation works too.
 
 ```sh
+just tex-pull           # once: TeX Live through Docker
 just dev                # API + web app on 127.0.0.1, prints a sign-in link
 just test               # Rust tests + TypeScript type check
 just lint               # what CI runs
@@ -64,6 +71,7 @@ token on the `/login` page. Scripts can send it as `Authorization: Bearer <token
 | `OPENPRISM_DATA_DIR` | API | platform data dir, e.g. `~/.local/share/open-prism` |
 | `OPENPRISM_PORT` | API | `8787` |
 | `OPENPRISM_ACCESS_TOKEN` | API | read from / created in `<data dir>/access-token` |
+| `OPENPRISM_TEX_IMAGE` | API, `just tex-pull` | `texlive/texlive:latest` (`none` disables Docker) |
 | `OPENPRISM_API_URL` | web | `http://127.0.0.1:8787` |
 | `WEB_PORT` | `just dev` / `just start` | `3737` |
 

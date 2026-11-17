@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 
 use anyhow::Context;
 use clap::Parser;
+use openprism_core::engines::{DetectOptions, detect_engines};
 use tokio::net::TcpListener;
 use tracing_subscriber::EnvFilter;
 
@@ -36,12 +37,20 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let engines = openprism_core::engines::detect_engines().await;
+    let engines = detect_engines(&DetectOptions {
+        search_path: None,
+        docker_image: args.docker_image(),
+    })
+    .await;
     if engines.is_empty() {
-        tracing::warn!("no TeX engine found on PATH (install TeX Live's latexmk or tectonic)");
+        tracing::warn!(
+            "no TeX engine found: pull the TeX Live image (`docker pull {}`) or install \
+             latexmk / tectonic",
+            args.tex_image
+        );
     }
     for engine in &engines {
-        tracing::info!(kind = ?engine.kind, path = %engine.path, version = ?engine.version, "TeX engine");
+        tracing::info!(kind = ?engine.kind, runtime = ?engine.runtime, version = ?engine.version, "TeX engine");
     }
 
     let app = routes::router(AppState::new(token, engines));

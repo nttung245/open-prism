@@ -22,14 +22,21 @@ export async function ApiStatus() {
       <h2 className="font-medium">API v{health.version}</h2>
       {health.engines.length === 0 ? (
         <p className="mt-1 text-amber-700 dark:text-amber-400">
-          No TeX engine found. Install TeX Live (latexmk) or Tectonic.
+          No TeX engine found. Run <code>just tex-pull</code> to download TeX
+          Live with Docker, or install latexmk or Tectonic.
         </p>
       ) : (
         <ul className="mt-2 space-y-1">
           {health.engines.map((engine) => (
-            <li key={engine.kind} className="font-mono text-xs">
+            <li
+              key={`${engine.kind}-${engine.runtime.type}`}
+              className="font-mono text-xs"
+            >
               {engine.kind}: {engine.version ?? "unknown version"} (
-              {engine.path})
+              {engine.runtime.type === "docker"
+                ? `docker ${engine.runtime.image}`
+                : engine.runtime.path}
+              )
             </li>
           ))}
         </ul>

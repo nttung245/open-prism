@@ -4,6 +4,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 api_port := env("OPENPRISM_PORT", "8787")
 web_port := env("WEB_PORT", "3737")
 api_url := "http://127.0.0.1:" + api_port
+tex_image := env("OPENPRISM_TEX_IMAGE", "texlive/texlive:latest")
 
 # List recipes
 default:
@@ -12,6 +13,10 @@ default:
 # Install web dependencies
 setup:
     pnpm -C web install --frozen-lockfile
+
+# Download TeX Live as a Docker image (2.6 GB download, ~9 GB on disk; nothing installed on the host)
+tex-pull:
+    docker pull {{tex_image}}
 
 # Run the API and the web app in development mode (both on 127.0.0.1)
 dev: setup

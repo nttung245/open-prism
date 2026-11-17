@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use openprism_core::engines::DEFAULT_DOCKER_IMAGE;
 
 /// Open Prism API server. Listens on 127.0.0.1 only; the Next.js app is the public entry point.
 #[derive(Debug, Parser)]
@@ -16,6 +17,11 @@ pub struct Args {
     #[arg(long, env = "OPENPRISM_PORT", default_value_t = 8787)]
     pub port: u16,
 
+    /// TeX Live Docker image used to compile when Docker is available ("none" disables it).
+    /// It is never pulled automatically: run `docker pull <image>` once.
+    #[arg(long, env = "OPENPRISM_TEX_IMAGE", default_value = DEFAULT_DOCKER_IMAGE)]
+    pub tex_image: String,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -29,6 +35,11 @@ pub enum Command {
 }
 
 impl Args {
+    pub fn docker_image(&self) -> Option<String> {
+        let image = self.tex_image.trim();
+        (!image.is_empty() && !image.eq_ignore_ascii_case("none")).then(|| image.to_owned())
+    }
+
     pub fn resolve_data_dir(&self) -> anyhow::Result<PathBuf> {
         match &self.data_dir {
             Some(dir) => Ok(dir.clone()),
