@@ -22,6 +22,7 @@ clap = { version = "4.6", features = ["derive", "env"] }
 dirs = "7"
 flate2 = "1.1"
 futures-util = "0.3"
+genai = "0.7.5"
 getrandom = "0.4"
 hex = "0.4"
 hmac = "0.13"
@@ -29,6 +30,7 @@ insta = { version = "1.49", features = ["yaml"] }
 mime_guess = "2"
 nix = { version = "0.32", features = ["signal", "process", "fs"] }
 notify = "8.2"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.11"
