@@ -55,12 +55,12 @@ async fn create(
 ) -> Result<(StatusCode, Json<Snapshot>), ApiError> {
     projects::get(&state, &id).await?;
     let label = history::validate_label(&request.label)?;
-    let summary = format!("Saved \u{201c}{label}\u{201d}");
+    let summary = "Saved version";
     let snapshot = history::take(
         &state,
         &id,
         SnapshotKind::Manual,
-        &summary,
+        summary,
         Some(label),
         true,
     )

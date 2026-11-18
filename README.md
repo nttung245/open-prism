@@ -22,6 +22,12 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
   before you decide. "Fix with AI" in the Problems list loops compile → fix → compile.
 - Quick actions on a selection (the AI menu): rewrite, shorten, fix grammar, translate,
   explain, or your own instruction.
+- Version history (the clock button). A version is saved when the project is created or
+  imported, before and after you accept AI edits, after a successful compile (at most every
+  ten minutes) and around every restore; "Save version…" saves one with a label. Each
+  version shows the files it changed with line diffs, or how it differs from the current
+  files. Restore one file or the whole project: the current files are saved first, so a
+  restore can be undone too.
 - Any provider: OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Mistral, Groq, xAI, OpenCode
   Go, Ollama or any OpenAI-compatible server (vLLM, LM Studio, llama.cpp). Models that cannot call tools
   are detected and switch to SEARCH/REPLACE edits automatically. Configure them in Settings,
@@ -40,6 +46,17 @@ docker exec ollama ollama pull qwen3:4b
 Then add an *Ollama* provider in Settings (base URL `http://127.0.0.1:11434`). Set
 `OLLAMA_CONTEXT_LENGTH`: Ollama's default context of 4096 tokens silently cuts off the
 project context and the tool descriptions.
+
+### Version history on disk
+
+History lives outside the project, in `<data dir>/history/<project id>.git`, a plain git
+repository, so exported ZIPs never contain it. Every file is recorded except symbolic links,
+anything named `.git` (your own repository or submodules) and files over 100 MB. To look at it
+without Open Prism:
+
+```sh
+git --git-dir ~/.local/share/open-prism/history/<project id>.git log --stat
+```
 
 ## Goals
 
@@ -119,7 +136,7 @@ token on the `/login` page. Scripts can send it as `Authorization: Bearer <token
       latexmk/Tectonic compilation, error list, PDF preview, SyncTeX
 - [x] **M2 AI**: provider settings, chat with project context, reviewed edits,
       "fix compile errors", fallback for models without tool calling
-- [ ] **M3 Research**: version history, literature search and verified citations,
+- [ ] **M3 Research**: version history (done), literature search and verified citations,
       image/handwriting to LaTeX, inline completion
 - [ ] **M4 Release**: password sign-in, Docker images, prebuilt binaries
 

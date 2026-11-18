@@ -153,6 +153,34 @@ describe("DocumentStore", () => {
     expect(status("main.tex")?.conflict).toBeNull();
   });
 
+  it("after a restore, reloads clean files and keeps conflicts", async () => {
+    const { server, store, edit, status } = setup();
+    server.put("intro.tex", "intro");
+    server.put("old.tex", "old");
+    await store.open("main.tex");
+    await store.open("old.tex");
+    await store.open("intro.tex");
+    // intro.tex is in conflict: unsaved edits and a newer copy on the server.
+    edit("intro.tex", " mine");
+    server.put("intro.tex", "theirs");
+    await store.refresh(["intro.tex"]);
+    expect(status("intro.tex")?.conflict?.kind).toBe("external");
+
+    // The restore rewrote main.tex and intro.tex and deleted old.tex.
+    server.put("main.tex", "restored main");
+    server.put("intro.tex", "restored intro");
+    server.files.delete("old.tex");
+    await store.refresh(["intro.tex", "main.tex", "old.tex"]);
+
+    expect(store.getState("main.tex")?.doc.toString()).toBe("restored main");
+    expect(status("main.tex")?.dirty).toBe(false);
+    expect(status("old.tex")).toBeUndefined();
+    expect(store.getState("intro.tex")?.doc.toString()).toBe("intro mine");
+    expect(status("intro.tex")?.conflict?.kind).toBe("external");
+    await vi.advanceTimersByTimeAsync(500);
+    expect(server.writes).toHaveLength(0);
+  });
+
   it("turns a rejected save into a conflict and can take the server copy", async () => {
     const { server, store, edit, status } = setup();
     await store.open("main.tex");
