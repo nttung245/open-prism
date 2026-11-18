@@ -3,8 +3,19 @@
 An open-source LaTeX editor with AI assistance that works with **any LLM provider**. It is a
 self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
 
-> **Status: pre-alpha.** The project skeleton is in place; the editor is not usable yet.
-> See the [roadmap](#roadmap).
+> **Status: pre-alpha.** You can edit and compile LaTeX projects; the AI assistant is not
+> there yet. See the [roadmap](#roadmap).
+
+## What works today
+
+- Projects: create, rename, delete; import a ZIP (Prism, Overleaf, arXiv) and download one.
+- Editor: file tree, tabs, LaTeX highlighting, autosave. A file changed by another program
+  reloads by itself; if you had unsaved edits too, you choose which version to keep.
+- Compilation with latexmk (pdfLaTeX, XeLaTeX, LuaLaTeX, chosen automatically or per
+  project) or Tectonic, on demand (`Ctrl+Enter`) or after every save. Errors and warnings
+  appear in the editor and in a Problems list.
+- PDF preview that keeps your place when it reloads. `Ctrl`/`⌘`-click or double-click the
+  PDF to jump to the source; `Ctrl+Alt+→` in the editor highlights the line in the PDF.
 
 ## Goals
 
@@ -52,7 +63,8 @@ throwaway container without network access. A native TeX Live (`latexmk`) or
 ```sh
 just tex-pull           # once: TeX Live through Docker
 just dev                # API + web app on 127.0.0.1, prints a sign-in link
-just test               # Rust tests + TypeScript type check
+just test               # Rust and TypeScript tests, type check
+just test docker        # also compile real documents in the TeX Live container
 just lint               # what CI runs
 just gen-types          # regenerate web/lib/api/types after changing API types
 just build && just start  # production build, run locally
@@ -77,8 +89,8 @@ token on the `/login` page. Scripts can send it as `Authorization: Bearer <token
 
 ## Roadmap
 
-- [ ] **M0 Bootstrap**: workspace, API skeleton, access-token sign-in, API proxy, CI
-- [ ] **M1 Editor and compilation**: projects, ZIP import/export, CodeMirror editor,
+- [x] **M0 Bootstrap**: workspace, API skeleton, access-token sign-in, API proxy, CI
+- [x] **M1 Editor and compilation**: projects, ZIP import/export, CodeMirror editor,
       latexmk/Tectonic compilation, error list, PDF preview, SyncTeX
 - [ ] **M2 AI**: provider settings, chat with project context, reviewed edits,
       "fix compile errors", fallback for models without tool calling

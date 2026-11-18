@@ -50,10 +50,11 @@ start:
 token:
     @cargo run -q -p openprism-server -- print-token
 
-# Run all tests
-test:
-    cargo test --workspace
+# Run all tests (add `docker` to also compile real documents in the TeX Live container)
+test *mode:
+    cargo test --workspace {{ if mode == "docker" { "-- --include-ignored" } else { "" } }}
     pnpm -C web typecheck
+    pnpm -C web test
 
 # Lint everything (what CI runs)
 lint:
