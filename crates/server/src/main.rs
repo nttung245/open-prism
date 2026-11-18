@@ -1,4 +1,5 @@
 mod auth;
+mod chat;
 mod cli;
 mod compiler;
 mod db;
@@ -6,6 +7,7 @@ mod error;
 mod events;
 mod projects;
 mod routes;
+mod settings;
 mod state;
 mod synctex_cache;
 

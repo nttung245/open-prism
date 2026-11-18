@@ -7,6 +7,7 @@ use openprism_core::engines::EngineInfo;
 use sqlx::SqlitePool;
 
 use crate::auth::AccessToken;
+use crate::chat::RunningTurns;
 use crate::compiler::Compiler;
 use crate::events::EventHub;
 use crate::synctex_cache::SyncTexCache;
@@ -25,6 +26,7 @@ pub struct Inner {
     pub events: EventHub,
     pub compiler: Compiler,
     pub synctex: SyncTexCache,
+    pub running_turns: RunningTurns,
     /// One lock per project so a version check and the write that follows are atomic.
     write_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -110,6 +112,7 @@ impl AppState {
             db,
             events: EventHub::default(),
             synctex: SyncTexCache::default(),
+            running_turns: RunningTurns::default(),
             write_locks: Mutex::default(),
         })))
     }

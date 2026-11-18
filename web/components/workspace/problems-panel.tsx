@@ -1,6 +1,6 @@
 "use client";
 
-import { CircleAlert, CircleX, Info } from "lucide-react";
+import { CircleAlert, CircleX, Info, Sparkles } from "lucide-react";
 import type { CompileResult } from "@/lib/api/types/CompileResult";
 import type { Diagnostic } from "@/lib/api/types/Diagnostic";
 
@@ -26,17 +26,30 @@ export function ProblemsPanel({
   result,
   logUrl,
   onSelect,
+  onFix,
 }: {
   result: CompileResult | null;
   logUrl: string | null;
   onSelect: (diagnostic: Diagnostic) => void;
+  /** Asks the assistant to fix the errors. */
+  onFix?: () => void;
 }) {
   const diagnostics = result?.diagnostics ?? [];
+  const errors = diagnostics.filter((d) => d.severity === "error").length;
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex h-8 shrink-0 items-center gap-3 border-b border-border px-3 text-xs text-muted">
         <span className="font-medium uppercase tracking-wide">Problems</span>
         <span className="flex-1" />
+        {onFix && errors > 0 && (
+          <button
+            type="button"
+            onClick={onFix}
+            className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-accent hover:bg-accent-soft"
+          >
+            <Sparkles className="size-3" /> Fix with AI
+          </button>
+        )}
         {logUrl && (
           <a
             href={logUrl}

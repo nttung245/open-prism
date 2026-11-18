@@ -22,6 +22,8 @@ allow = [
     "Unlicense",
     "Zlib",
     "CC0-1.0",
+    # Mozilla's root certificate data (webpki-root-certs, via reqwest's TLS verifier).
+    "CDLA-Permissive-2.0",
 ]
 
 [bans]

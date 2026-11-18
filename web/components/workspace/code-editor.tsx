@@ -54,6 +54,18 @@ export type CodeEditorHandle = {
   goTo: (line: number, column?: number | null) => void;
   /** 1-based line and column of the main cursor. */
   cursor: () => { line: number; column: number } | null;
+  /** The main selection (empty text when nothing is selected). */
+  selection: () => { from: number; to: number; text: string } | null;
+  /**
+   * Replaces `expected` at `from`-`to` with `text`, or the unique other occurrence of
+   * `expected` if the document moved. Returns false if it cannot be found.
+   */
+  replace: (
+    from: number,
+    to: number,
+    expected: string,
+    text: string,
+  ) => boolean;
   focus: () => void;
 };
 
@@ -289,6 +301,30 @@ export function CodeEditor({
         const head = editor.state.selection.main.head;
         const line = editor.state.doc.lineAt(head);
         return { line: line.number, column: head - line.from + 1 };
+      },
+      selection() {
+        const editor = view.current;
+        if (!editor) return null;
+        const { from, to } = editor.state.selection.main;
+        return { from, to, text: editor.state.sliceDoc(from, to) };
+      },
+      replace(from, to, expected, text) {
+        const editor = view.current;
+        if (!editor || !expected) return false;
+        let start = from;
+        if (editor.state.sliceDoc(from, to) !== expected) {
+          const doc = editor.state.doc.toString();
+          start = doc.indexOf(expected);
+          if (start === -1 || doc.indexOf(expected, start + 1) !== -1)
+            return false;
+        }
+        editor.dispatch({
+          changes: { from: start, to: start + expected.length, insert: text },
+          selection: EditorSelection.range(start, start + text.length),
+          scrollIntoView: true,
+        });
+        editor.focus();
+        return true;
       },
       focus() {
         view.current?.focus();

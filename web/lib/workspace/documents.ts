@@ -327,6 +327,45 @@ export class DocumentStore {
     return [...this.docs.values()].some((doc) => doc.dirty);
   }
 
+  /**
+   * Applies AI edits (`old` → `new`) to a document as one undoable change and saves it.
+   * An edit whose `old` text no longer appears exactly once is skipped; its index is returned
+   * in `failed`. Opens the document if needed.
+   */
+  async applyEdits(
+    path: string,
+    edits: Array<{ old: string; new: string }>,
+  ): Promise<{ failed: number[] }> {
+    if (!this.docs.has(path)) await this.open(path);
+    const doc = this.docs.get(path);
+    if (!doc?.state) return { failed: edits.map((_, i) => i) };
+    const text = doc.state.doc.toString();
+    const failed: number[] = [];
+    const changes: Array<{ from: number; to: number; insert: string }> = [];
+    edits.forEach((edit, index) => {
+      const at = edit.old ? text.indexOf(edit.old) : -1;
+      const unique = at !== -1 && text.indexOf(edit.old, at + 1) === -1;
+      const overlaps = changes.some(
+        (c) => at < c.to && at + edit.old.length > c.from,
+      );
+      if (!unique || overlaps) {
+        failed.push(index);
+      } else {
+        changes.push({ from: at, to: at + edit.old.length, insert: edit.new });
+      }
+    });
+    if (changes.length > 0) {
+      changes.sort((x, y) => x.from - y.from);
+      if (this.active === path && this.view) {
+        this.view.dispatch({ changes });
+      } else {
+        this.update(path, doc.state.update({ changes }).state);
+      }
+      await this.save(path);
+    }
+    return { failed };
+  }
+
   // --- changes from elsewhere ----------------------------------------------------------
 
   /** Reacts to files changed on disk. `""` stands for the whole project. */
