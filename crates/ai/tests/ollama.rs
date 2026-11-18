@@ -60,7 +60,7 @@ async fn turn(
         Turn {
             model,
             system,
-            history: vec![Message::User { text: text.into() }],
+            history: vec![Message::user(text)],
             mode,
             tools: ctx.clone(),
             max_steps: 4,
@@ -137,7 +137,7 @@ async fn gemma_rejects_tools() {
     let model = Model::new(&ollama(), "gemma3:1b").unwrap();
     let request = LlmRequest {
         system: "test".into(),
-        messages: vec![Message::User { text: "hi".into() }],
+        messages: vec![Message::user("hi")],
         tools: tools::specs(),
         max_tokens: Some(20),
         ..LlmRequest::default()

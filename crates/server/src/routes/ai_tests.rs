@@ -70,6 +70,26 @@ impl App {
     }
 }
 
+impl App {
+    /// A GET returning the raw body, with or without the access token.
+    async fn raw(&self, uri: &str, token: bool) -> (StatusCode, header::HeaderMap, Vec<u8>) {
+        let mut request = Request::builder().uri(uri);
+        if token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+        }
+        let response = self
+            .router
+            .clone()
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        (status, headers, bytes.to_vec())
+    }
+}
+
 fn sse(chunks: &[Value]) -> ResponseTemplate {
     let mut body: String = chunks
         .iter()
@@ -903,4 +923,373 @@ async fn completions_check_their_input_and_need_a_model() {
         server.received_requests().await.unwrap().is_empty(),
         "nothing reached the provider"
     );
+}
+
+/// A 1×1 PNG.
+const PNG_BASE64: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+
+fn captured(page: u32, line: u32) -> Value {
+    json!({"data": PNG_BASE64, "page": page, "source": {"file": "main.tex", "line": line}})
+}
+
+/// Files in a conversation's image directory.
+fn image_files(app: &App, project_id: &str, thread_id: &str) -> Vec<String> {
+    let dir = app
+        .state
+        .paths
+        .thread_attachments_dir(project_id, thread_id);
+    std::fs::read_dir(dir).map_or_else(
+        |_| Vec::new(),
+        |entries| {
+            entries
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        },
+    )
+}
+
+#[tokio::test]
+async fn messages_carry_images_stored_next_to_the_conversation() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(
+        &server,
+        vec![
+            sse(&[text_chunk("It overflows the margin."), finish("stop")]),
+            sse(&[text_chunk("Here it is."), finish("stop")]),
+        ],
+    )
+    .await;
+    let (project_id, thread_id) = setup(&app, &server).await;
+
+    let (status, events) = app
+        .call(
+            Method::POST,
+            &format!("/api/ai/threads/{thread_id}/messages"),
+            Some(json!({"text": "Why?", "images": [captured(2, 3)]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    assert_eq!(
+        events.as_array().unwrap().last().unwrap()["status"],
+        "complete"
+    );
+
+    let (_, view) = app
+        .call(Method::GET, &format!("/api/ai/threads/{thread_id}"), None)
+        .await;
+    let user = &view["messages"][0]["message"];
+    assert_eq!(user["role"], "user");
+    assert_eq!(user["text"], "Why?");
+    let image = &user["images"][0];
+    assert_eq!(image["mediaType"], "image/png");
+    assert_eq!(image["page"], 2);
+    assert_eq!(image["source"], json!({"file": "main.tex", "line": 3}));
+    assert!(
+        image.get("data").is_none(),
+        "bytes are not part of the message"
+    );
+    let id = image["id"].as_str().unwrap();
+    assert_eq!(
+        image_files(&app, &project_id, &thread_id),
+        [format!("{id}.png")]
+    );
+    // Nothing in the project.
+    let project_dir = app.state.paths.project_dir(&project_id);
+    assert!(
+        !std::fs::read_dir(&project_dir).unwrap().any(|e| e
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".png"))
+    );
+
+    // Only an image, no text.
+    let (status, _) = app
+        .call(
+            Method::POST,
+            &format!("/api/ai/threads/{thread_id}/messages"),
+            Some(json!({"images": [{"data": PNG_BASE64}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(image_files(&app, &project_id, &thread_id).len(), 2);
+}
+
+#[tokio::test]
+async fn invalid_images_are_refused_before_anything_happens() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    let (project_id, thread_id) = setup(&app, &server).await;
+    let encode =
+        |bytes: &[u8]| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+    let pdf = encode(b"%PDF-1.7\n");
+    // Larger than the default 2 MB body limit, so this also checks the route's own limit.
+    let mut large = b"\x89PNG\r\n\x1a\n".to_vec();
+    large.resize(6 * 1024 * 1024, 0);
+    let large = encode(&large);
+    for (body, reason) in [
+        (
+            json!({"text": "Look", "images": [{"data": large}]}),
+            "larger than 5 MB",
+        ),
+        (
+            json!({"text": "Look", "images": [{"data": pdf}]}),
+            "not a PNG",
+        ),
+        (
+            json!({"text": "Look", "images": [{"data": "%%%"}]}),
+            "base64",
+        ),
+        (
+            json!({"text": "Look", "images": [captured(1, 1), captured(1, 1), captured(1, 1), captured(1, 1), captured(1, 1)]}),
+            "at most 4",
+        ),
+        (json!({"text": "  ", "images": []}), "empty"),
+    ] {
+        let (status, error) = app
+            .call(
+                Method::POST,
+                &format!("/api/ai/threads/{thread_id}/messages"),
+                Some(body),
+            )
+            .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+        assert!(
+            error["error"]["message"].as_str().unwrap().contains(reason),
+            "{error}"
+        );
+    }
+    assert!(image_files(&app, &project_id, &thread_id).is_empty());
+    let (_, view) = app
+        .call(Method::GET, &format!("/api/ai/threads/{thread_id}"), None)
+        .await;
+    assert!(view["messages"].as_array().unwrap().is_empty());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn images_are_served_only_from_their_conversation_and_go_with_it() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(&server, vec![sse(&[text_chunk("Ok."), finish("stop")])]).await;
+    let (project_id, thread_id) = setup(&app, &server).await;
+    app.call(
+        Method::POST,
+        &format!("/api/ai/threads/{thread_id}/messages"),
+        Some(json!({"text": "Look", "images": [captured(1, 1)]})),
+    )
+    .await;
+    let (_, view) = app
+        .call(Method::GET, &format!("/api/ai/threads/{thread_id}"), None)
+        .await;
+    let id = view["messages"][0]["message"]["images"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let url = format!("/api/ai/threads/{thread_id}/images/{id}");
+
+    let (status, headers, bytes) = app.raw(&url, true).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+    assert_eq!(headers[header::CACHE_CONTROL], "no-store");
+    assert_eq!(
+        bytes,
+        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, PNG_BASE64).unwrap()
+    );
+    let (status, _, _) = app.raw(&url, false).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // Unknown ids, ids that are not UUIDs, and ids asked through another conversation.
+    let (_, other) = app
+        .call(
+            Method::POST,
+            "/api/ai/threads",
+            Some(json!({"projectId": project_id})),
+        )
+        .await;
+    let other_id = other["id"].as_str().unwrap();
+    for uri in [
+        format!(
+            "/api/ai/threads/{thread_id}/images/{}",
+            uuid::Uuid::now_v7()
+        ),
+        format!("/api/ai/threads/{thread_id}/images/..%2F..%2Fopen-prism.db"),
+        format!("/api/ai/threads/{other_id}/images/{id}"),
+        format!("/api/ai/threads/nope/images/{id}"),
+    ] {
+        let (status, _, _) = app.raw(&uri, true).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+    }
+
+    // Deleting the conversation deletes its images.
+    let (status, _) = app
+        .call(
+            Method::DELETE,
+            &format!("/api/ai/threads/{thread_id}"),
+            None,
+        )
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _, _) = app.raw(&url, true).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        !app.state
+            .paths
+            .thread_attachments_dir(&project_id, &thread_id)
+            .exists()
+    );
+
+    // Deleting the project deletes the images of all its conversations.
+    script(&server, vec![sse(&[text_chunk("Ok."), finish("stop")])]).await;
+    app.call(
+        Method::POST,
+        &format!("/api/ai/threads/{other_id}/messages"),
+        Some(json!({"text": "Look", "images": [captured(1, 1)]})),
+    )
+    .await;
+    assert!(app.state.paths.attachments_dir(&project_id).exists());
+    let (status, _) = app
+        .call(Method::DELETE, &format!("/api/projects/{project_id}"), None)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(!app.state.paths.attachments_dir(&project_id).exists());
+}
+
+/// The images and the texts of the user messages of a request sent to the provider.
+fn sent_user_content(request: &wiremock::Request) -> (Vec<String>, Vec<String>) {
+    let body: Value = serde_json::from_slice(&request.body).unwrap();
+    let mut images = Vec::new();
+    let mut texts = Vec::new();
+    for message in body["messages"].as_array().unwrap() {
+        if message["role"] != "user" {
+            continue;
+        }
+        match &message["content"] {
+            Value::String(text) => texts.push(text.clone()),
+            Value::Array(parts) => {
+                for part in parts {
+                    match part["type"].as_str() {
+                        Some("image_url") => {
+                            images.push(part["image_url"]["url"].as_str().unwrap().to_owned());
+                        }
+                        Some("text") => texts.push(part["text"].as_str().unwrap().to_owned()),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    (images, texts)
+}
+
+#[tokio::test]
+async fn images_reach_the_model_with_their_page_and_source_while_recent() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    let reply = || sse(&[text_chunk("Ok."), finish("stop")]);
+    script(&server, vec![reply(), reply(), reply(), reply(), reply()]).await;
+    let (_, thread_id) = setup(&app, &server).await;
+    let send = |body: Value| {
+        let app = &app;
+        let thread_id = &thread_id;
+        async move {
+            let (status, events) = app
+                .call(
+                    Method::POST,
+                    &format!("/api/ai/threads/{thread_id}/messages"),
+                    Some(body),
+                )
+                .await;
+            assert_eq!(status, StatusCode::OK, "{events}");
+            assert_eq!(
+                events.as_array().unwrap().last().unwrap()["status"],
+                "complete",
+                "{events}"
+            );
+        }
+    };
+
+    send(json!({"text": "Why does it overflow?", "images": [captured(2, 12)]})).await;
+    let requests = server.received_requests().await.unwrap();
+    let (images, texts) = sent_user_content(&requests[0]);
+    assert_eq!(images, [format!("data:image/png;base64,{PNG_BASE64}")]);
+    assert!(
+        texts.contains(&"Why does it overflow?".to_owned()),
+        "{texts:?}"
+    );
+    assert!(
+        texts
+            .contains(&"Image 1: captured from the PDF, page 2, near main.tex line 12.".to_owned()),
+        "{texts:?}"
+    );
+
+    // A follow-up question still shows the model the image.
+    send(json!({"text": "Rewrite it with align"})).await;
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(sent_user_content(&requests[1]).0.len(), 1);
+
+    // 1 + 4 + 4 + 1 = 10 images: only the 8 most recent are sent, the 2 oldest are only
+    // mentioned.
+    let four = json!([
+        captured(3, 1),
+        captured(3, 2),
+        captured(3, 3),
+        captured(3, 4)
+    ]);
+    send(json!({"text": "More", "images": four})).await;
+    send(json!({"text": "Even more", "images": four})).await;
+    send(json!({"text": "Last", "images": [captured(4, 1)]})).await;
+    let requests = server.received_requests().await.unwrap();
+    let (images, texts) = sent_user_content(&requests[4]);
+    assert_eq!(images.len(), 8);
+    let mentioned = texts
+        .iter()
+        .map(|t| t.matches("(no longer sent)").count())
+        .sum::<usize>();
+    assert_eq!(mentioned, 2, "{texts:?}");
+    assert!(
+        texts
+            .iter()
+            .any(|t| t.contains("Image 1 (no longer sent): captured from the PDF, page 2")),
+        "{texts:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_model_that_refuses_images_reports_it_and_keeps_the_message() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(
+            json!({"error": {"message": "this model does not support image input"}}),
+        ))
+        .mount(&server)
+        .await;
+    let (_, thread_id) = setup(&app, &server).await;
+    let (status, events) = app
+        .call(
+            Method::POST,
+            &format!("/api/ai/threads/{thread_id}/messages"),
+            Some(json!({"text": "What is this?", "images": [captured(1, 1)]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let error = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["type"] == "error")
+        .unwrap();
+    assert!(
+        error["message"].as_str().unwrap().contains("image input"),
+        "{error}"
+    );
+    let (_, view) = app
+        .call(Method::GET, &format!("/api/ai/threads/{thread_id}"), None)
+        .await;
+    let user = &view["messages"][0]["message"];
+    assert_eq!(user["text"], "What is this?");
+    assert_eq!(user["images"].as_array().unwrap().len(), 1);
 }

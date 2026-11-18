@@ -2,11 +2,12 @@
 //! the UI) and a streaming call that yields text, reasoning, tool calls and usage.
 
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{Stream, StreamExt};
 use genai::chat::{
-    ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent, ContentPart, MessageContent,
+    Binary, ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent, ContentPart, MessageContent,
     ReasoningEffort, Tool, ToolCall as GenaiToolCall, ToolResponse,
 };
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
@@ -30,6 +31,10 @@ use crate::provider::{ProviderConfig, ProviderKind};
 pub enum Message {
     User {
         text: String,
+        /// Images sent with the text; absent from messages without any.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[ts(as = "Option<Vec<ImageRef>>", optional)]
+        images: Vec<ImageRef>,
     },
     Assistant {
         parts: Vec<AssistantPart>,
@@ -38,6 +43,49 @@ pub enum Message {
     Tool {
         results: Vec<ToolResult>,
     },
+}
+
+impl Message {
+    /// A user message with text only.
+    pub fn user(text: impl Into<String>) -> Self {
+        Self::User {
+            text: text.into(),
+            images: Vec::new(),
+        }
+    }
+}
+
+/// An image attached to a user message. Its bytes are kept outside the message (the server
+/// stores them as files) and are loaded into `data` only to send the message to a model.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct ImageRef {
+    pub id: String,
+    /// `image/png`, `image/jpeg` or `image/webp`.
+    pub media_type: String,
+    /// The PDF page it was captured from (1-based).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub page: Option<u32>,
+    /// Where SyncTeX places the captured region in the project's sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub source: Option<SourceRef>,
+    /// The image, base64-encoded, while it is being sent to a model; never stored.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub data: Option<Arc<str>>,
+}
+
+/// A position in the project's sources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SourceRef {
+    /// Path relative to the project root.
+    pub file: String,
+    /// 1-based line.
+    pub line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -330,12 +378,58 @@ fn to_u32(value: Option<i32>) -> u32 {
     value.and_then(|v| u32::try_from(v).ok()).unwrap_or(0)
 }
 
+/// The parts of a user message with images: its text, then for each image a line saying where
+/// it comes from and the image itself. An image whose bytes were not loaded (an old one, past
+/// the number sent per turn) keeps only its line.
+fn user_parts(text: &str, images: &[ImageRef]) -> Vec<ContentPart> {
+    let mut parts = Vec::with_capacity(1 + 2 * images.len());
+    if !text.is_empty() {
+        parts.push(ContentPart::Text(text.to_owned()));
+    }
+    for (index, image) in images.iter().enumerate() {
+        let number = index + 1;
+        let origin = describe_image(image);
+        match &image.data {
+            Some(data) => {
+                parts.push(ContentPart::Text(format!("Image {number}: {origin}")));
+                parts.push(ContentPart::Binary(Binary::from_base64(
+                    image.media_type.clone(),
+                    Arc::clone(data),
+                    None,
+                )));
+            }
+            None => parts.push(ContentPart::Text(format!(
+                "Image {number} (no longer sent): {origin}"
+            ))),
+        }
+    }
+    parts
+}
+
+/// Where an image comes from, for the model.
+fn describe_image(image: &ImageRef) -> String {
+    match (image.page, &image.source) {
+        (Some(page), Some(source)) => format!(
+            "captured from the PDF, page {page}, near {} line {}.",
+            source.file, source.line
+        ),
+        (Some(page), None) => format!("captured from the PDF, page {page}."),
+        (None, Some(source)) => format!("near {} line {}.", source.file, source.line),
+        (None, None) => "attached by the user.".to_owned(),
+    }
+}
+
 /// Our messages in `genai` form. Reasoning is display-only and is not sent back.
 fn to_genai_messages(messages: &[Message]) -> Vec<ChatMessage> {
     let mut out = Vec::with_capacity(messages.len());
     for message in messages {
         match message {
-            Message::User { text } => out.push(ChatMessage::user(text.clone())),
+            Message::User { text, images } if images.is_empty() => {
+                out.push(ChatMessage::user(text.clone()));
+            }
+            Message::User { text, images } => out.push(ChatMessage::user(
+                MessageContent::from_parts(user_parts(text, images)),
+            )),
             Message::Assistant { parts } => {
                 let parts: Vec<ContentPart> = parts
                     .iter()
@@ -410,12 +504,98 @@ mod tests {
         assert_eq!(back, message);
     }
 
+    fn image(id: &str, data: Option<&str>) -> ImageRef {
+        ImageRef {
+            id: id.into(),
+            media_type: "image/png".into(),
+            page: Some(2),
+            source: Some(SourceRef {
+                file: "chapters/intro.tex".into(),
+                line: 12,
+            }),
+            data: data.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn user_messages_keep_their_old_form_and_store_images_without_bytes() {
+        // Stored before images existed.
+        let old: Message = serde_json::from_value(json!({"role": "user", "text": "Hi"})).unwrap();
+        assert_eq!(old, Message::user("Hi"));
+        // Without images, written exactly as before.
+        assert_eq!(
+            serde_json::to_value(Message::user("Hi")).unwrap(),
+            json!({"role": "user", "text": "Hi"})
+        );
+        // With images: the reference, never the bytes.
+        let message = Message::User {
+            text: "Why?".into(),
+            images: vec![image("a1", Some("iVBORw0KGgo="))],
+        };
+        let json = serde_json::to_value(&message).unwrap();
+        assert_eq!(
+            json,
+            json!({"role": "user", "text": "Why?", "images": [{
+                "id": "a1", "mediaType": "image/png", "page": 2,
+                "source": {"file": "chapters/intro.tex", "line": 12}
+            }]})
+        );
+        let back: Message = serde_json::from_value(json).unwrap();
+        let Message::User { images, .. } = back else {
+            panic!("a user message")
+        };
+        assert_eq!(images[0].data, None);
+        assert_eq!(images[0].source, image("a1", None).source);
+    }
+
+    #[test]
+    fn user_images_are_sent_after_the_text_with_where_they_come_from() {
+        let mut second = image("a2", None);
+        second.source = None;
+        let messages = vec![
+            Message::User {
+                text: "Why does it overflow?".into(),
+                images: vec![image("a1", Some("iVBORw0KGgo=")), second],
+            },
+            Message::user("Plain"),
+        ];
+        let text = |part: &ContentPart| match part {
+            ContentPart::Text(text) => Some(text.clone()),
+            _ => None,
+        };
+        let out = to_genai_messages(&messages);
+        let parts = out[0].content.parts();
+        assert_eq!(parts.len(), 4, "{parts:?}");
+        assert_eq!(text(&parts[0]).as_deref(), Some("Why does it overflow?"));
+        assert_eq!(
+            text(&parts[1]).as_deref(),
+            Some("Image 1: captured from the PDF, page 2, near chapters/intro.tex line 12.")
+        );
+        let ContentPart::Binary(binary) = &parts[2] else {
+            panic!("an image: {parts:?}")
+        };
+        assert_eq!(binary.content_type, "image/png");
+        assert!(binary.is_image());
+        // Not loaded: only the line remains.
+        assert_eq!(
+            text(&parts[3]).as_deref(),
+            Some("Image 2 (no longer sent): captured from the PDF, page 2.")
+        );
+        // Messages without images are unchanged.
+        assert_eq!(out[1].content.joined_texts().as_deref(), Some("Plain"));
+        assert_eq!(out[1].content.parts().len(), 1);
+        // Only images, no text.
+        let only = to_genai_messages(&[Message::User {
+            text: String::new(),
+            images: vec![image("a3", Some("AAAA"))],
+        }]);
+        assert_eq!(only[0].content.parts().len(), 2);
+    }
+
     #[test]
     fn conversion_drops_reasoning_and_splits_tool_results() {
         let messages = vec![
-            Message::User {
-                text: "Fix it".into(),
-            },
+            Message::user("Fix it"),
             Message::Assistant {
                 parts: vec![
                     AssistantPart::Reasoning {

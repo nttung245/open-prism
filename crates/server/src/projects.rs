@@ -241,6 +241,7 @@ pub async fn delete(state: &AppState, id: &str) -> Result<(), ApiError> {
         state.paths.build_dir(id),
         state.paths.runs_dir(id),
         state.paths.history_dir(id),
+        state.paths.attachments_dir(id),
     ] {
         match tokio::fs::remove_dir_all(&dir).await {
             Ok(()) => {}

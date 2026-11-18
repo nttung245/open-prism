@@ -19,9 +19,7 @@ fn sse(events: &[&str]) -> String {
 fn request() -> LlmRequest {
     LlmRequest {
         system: "You are a test.".into(),
-        messages: vec![Message::User {
-            text: "Read main.tex".into(),
-        }],
+        messages: vec![Message::user("Read main.tex")],
         tools: vec![ToolSpec {
             name: "read_file",
             description: "Read a file",

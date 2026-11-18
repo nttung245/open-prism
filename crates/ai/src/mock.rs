@@ -45,7 +45,7 @@ impl MockModel {
                 .iter()
                 .rev()
                 .find_map(|message| match message {
-                    Message::User { text } => Some(text.clone()),
+                    Message::User { text, .. } => Some(text.clone()),
                     _ => None,
                 })
                 .unwrap_or_default();
