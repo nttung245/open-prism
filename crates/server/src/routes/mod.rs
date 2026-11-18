@@ -1,5 +1,11 @@
+#[cfg(test)]
+mod api_tests;
 mod auth;
+mod compile;
+mod files;
 mod health;
+mod projects;
+mod synctex;
 
 use axum::Router;
 use axum::middleware;
@@ -9,7 +15,13 @@ use crate::error::ApiError;
 use crate::state::AppState;
 
 pub fn router(state: AppState) -> Router {
-    let api = Router::new().merge(health::routes()).merge(auth::routes());
+    let api = Router::new()
+        .merge(health::routes())
+        .merge(auth::routes())
+        .merge(projects::routes())
+        .merge(files::routes())
+        .merge(compile::routes())
+        .merge(synctex::routes());
 
     Router::new()
         .nest("/api", api)
@@ -32,14 +44,21 @@ mod tests {
     use super::*;
     use crate::auth::{AccessToken, SESSION_COOKIE};
 
-    const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    pub(crate) const TOKEN: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-    fn app() -> Router {
-        router(AppState::new(AccessToken::new(TOKEN).unwrap(), Vec::new()))
+    async fn app() -> Router {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::open(dir.path(), AccessToken::new(TOKEN).unwrap(), Vec::new())
+            .await
+            .unwrap();
+        // Keep the directory for the lifetime of the test process.
+        std::mem::forget(dir);
+        router(state)
     }
 
     async fn send(request: Request<Body>) -> (StatusCode, header::HeaderMap, serde_json::Value) {
-        let response = app().oneshot(request).await.unwrap();
+        let response = app().await.oneshot(request).await.unwrap();
         let status = response.status();
         let headers = response.headers().clone();
         let bytes = response.into_body().collect().await.unwrap().to_bytes();

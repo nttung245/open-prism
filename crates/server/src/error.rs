@@ -56,3 +56,80 @@ impl IntoResponse for ApiError {
         (self.status, Json(body)).into_response()
     }
 }
+
+impl ApiError {
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
+    }
+
+    pub fn conflict(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::CONFLICT, code, message)
+    }
+
+    /// Logs the cause and hides it from the client.
+    pub fn internal(cause: impl std::fmt::Display) -> Self {
+        tracing::error!(%cause, "internal error");
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "internal error, see the API log",
+        )
+    }
+}
+
+impl From<openprism_core::paths::PathError> for ApiError {
+    fn from(err: openprism_core::paths::PathError) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "invalid_path", err.to_string())
+    }
+}
+
+impl From<openprism_core::files::FileError> for ApiError {
+    fn from(err: openprism_core::files::FileError) -> Self {
+        use openprism_core::files::FileError as E;
+        match err {
+            E::Path(err) => err.into(),
+            E::NotFound(_) => Self::not_found(err.to_string()),
+            E::AlreadyExists(_) => Self::conflict("already_exists", err.to_string()),
+            E::IsDirectory(_) | E::NotDirectory(_) | E::IntoItself(_) => {
+                Self::bad_request(err.to_string())
+            }
+            E::VersionConflict { .. } => Self::new(
+                StatusCode::PRECONDITION_FAILED,
+                "version_conflict",
+                err.to_string(),
+            ),
+            E::TooManyEntries => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "too_many_files",
+                err.to_string(),
+            ),
+            E::Io(err) => Self::internal(err),
+        }
+    }
+}
+
+impl From<openprism_core::archive::ArchiveError> for ApiError {
+    fn from(err: openprism_core::archive::ArchiveError) -> Self {
+        use openprism_core::archive::ArchiveError as E;
+        match err {
+            E::Io(err) => Self::internal(err),
+            other => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "invalid_archive",
+                other.to_string(),
+            ),
+        }
+    }
+}
+
+impl From<sqlx::Error> for ApiError {
+    fn from(err: sqlx::Error) -> Self {
+        Self::internal(err)
+    }
+}
+
+impl From<tokio::task::JoinError> for ApiError {
+    fn from(err: tokio::task::JoinError) -> Self {
+        Self::internal(err)
+    }
+}
