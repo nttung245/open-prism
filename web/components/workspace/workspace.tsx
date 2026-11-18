@@ -352,12 +352,14 @@ export default function Workspace({
       work.urls.clear();
     };
   }, []);
+  // Removing or sending images: what was said about the last ones added no longer applies.
   const changeDraftImages = useCallback(
     (change: SetStateAction<DraftImage[]>) => {
       const next =
         typeof change === "function" ? change(draftImagesRef.current) : change;
       draftImagesRef.current = next;
       setDraftImages(next);
+      setImageProblem(null);
     },
     [],
   );

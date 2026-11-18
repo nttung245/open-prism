@@ -21,11 +21,11 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
   your question. `Esc` while dragging cancels; a message takes up to four images. The
   conversation's model has to read images (DeepSeek v4.1 Flash through OpenCode Go does);
   one that cannot shows the provider's error.
-- Ảnh trong chat: chụp vùng PDF như trên, dán ảnh vào ô nhập khi clipboard không có chữ,
-  kéo thả file vào panel trợ lý hoặc dùng nút đính kèm để chọn nhiều file. Hỗ trợ PNG,
-  JPEG và WebP; ảnh có cạnh dài hơn 2.000 pixel được thu nhỏ trước khi gửi, và ảnh vẫn
-  lớn hơn 5 MB sẽ bị từ chối. Mỗi tin nhắn nhận tối đa bốn ảnh, tính cả ảnh chụp PDF;
-  file gốc trên máy không thay đổi.
+- Images in the chat: besides PDF captures, paste an image into the message box (when the
+  clipboard holds no text), drop image files on the assistant, or pick them with the
+  paperclip button. PNG, JPEG and WebP are accepted; images over 2,000 pixels on their
+  longest side are scaled down before sending (your files are not changed), and one still
+  over 5 MB is refused. The four-image limit of a message counts PDF captures too.
 - AI assistant (the robot button): it reads the project with tools (files, search, outline,
   compile log) and **proposes** edits, shown as word-level diffs. You accept or reject each
   change; accepted changes go into the editor, so `Ctrl+Z` undoes them. Nothing is written
