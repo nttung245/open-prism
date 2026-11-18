@@ -2,6 +2,7 @@ mod auth;
 mod chat;
 mod cli;
 mod compiler;
+mod completion;
 mod db;
 mod error;
 mod events;

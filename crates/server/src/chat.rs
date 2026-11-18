@@ -735,7 +735,7 @@ fn ai_edit_summary(accepted: &[&Patch]) -> String {
     }
 }
 
-async fn record_usage(
+pub(crate) async fn record_usage(
     state: &AppState,
     thread_id: Option<&str>,
     model: &ModelRef,

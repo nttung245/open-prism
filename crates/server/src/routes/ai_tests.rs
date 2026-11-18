@@ -687,3 +687,134 @@ async fn a_broken_history_does_not_break_decisions() {
     );
     assert_eq!(snapshot_kinds(&app, &project_id).await, ["created"]);
 }
+
+#[tokio::test]
+async fn completions_send_only_the_text_around_the_cursor_and_never_cite() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(
+        &server,
+        vec![sse(&[
+            text_chunk(" như đã chỉ ra trong "),
+            text_chunk("\\cite{smith2020} và các nghiên cứu sau."),
+            finish("stop"),
+        ])],
+    )
+    .await;
+    let (project_id, _) = setup(&app, &server).await;
+
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/complete",
+            Some(json!({
+                "projectId": project_id, "path": "main.tex",
+                "prefix": "Kết quả này", "suffix": "\n\\end{document}",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["text"], " như đã chỉ ra trong");
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let sent: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let user = sent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "user")
+        .unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(user.contains("File: main.tex"), "{user}");
+    assert!(
+        user.contains("Kết quả này<CURSOR>\n\\end{document}"),
+        "{user}"
+    );
+    assert!(
+        sent.get("tools")
+            .is_none_or(|tools| tools.as_array().is_none_or(Vec::is_empty)),
+        "no tools are offered"
+    );
+    assert!(
+        sent["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Never add citations")
+    );
+    assert_eq!(
+        sent["reasoning_effort"], "low",
+        "the role's reasoning level"
+    );
+
+    let usage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage WHERE thread_id IS NULL")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(usage, 1);
+}
+
+#[tokio::test]
+async fn completions_check_their_input_and_need_a_model() {
+    let app = App::new().await;
+    let (status, project) = app
+        .call(
+            Method::POST,
+            "/api/projects",
+            Some(json!({"name": "No model"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let lonely = project["id"].as_str().unwrap().to_owned();
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/complete",
+            Some(json!({"projectId": lonely, "path": "main.tex", "prefix": "Hello"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Settings")
+    );
+
+    let server = MockServer::start().await;
+    let (project_id, _) = setup(&app, &server).await;
+    let long = "x".repeat(5_000);
+    for (request, expected) in [
+        (
+            json!({"projectId": project_id, "path": "main.tex", "prefix": long}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "main.tex", "prefix": "a", "suffix": "y".repeat(1_001)}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "main.tex", "prefix": " ", "suffix": "\n"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "../x.tex", "prefix": "Hello"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": "01a1ecad-45ba-70a8-94cd-01767fa28a2f", "path": "main.tex", "prefix": "Hello"}),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let (status, body) = app
+            .call(Method::POST, "/api/ai/complete", Some(request.clone()))
+            .await;
+        assert_eq!(status, expected, "{request} → {body}");
+    }
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "nothing reached the provider"
+    );
+}
