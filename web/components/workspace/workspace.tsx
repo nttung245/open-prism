@@ -4,11 +4,13 @@ import type { EditorView } from "@codemirror/view";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  Bot,
   CircleCheck,
   CircleX,
   Download,
   LoaderCircle,
   Play,
+  Settings,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -21,6 +23,11 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
+import {
+  type AssistantHandle,
+  AssistantPanel,
+} from "@/components/assistant/assistant-panel";
+import { InlineActions } from "@/components/assistant/inline-actions";
 import { Button, IconButton } from "@/components/ui/button";
 import {
   ApiError,
@@ -99,6 +106,54 @@ export default function Workspace({
   const nodes = useMemo(() => buildTree(tree.data?.entries ?? []), [tree.data]);
 
   const [notice, setNotice] = useState<string | null>(null);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const assistant = useRef<AssistantHandle>(null);
+  const pendingAssistantMessage = useRef<string | null>(null);
+  useEffect(() => {
+    try {
+      setAssistantOpen(
+        window.localStorage.getItem("openprism:assistant") === "open",
+      );
+    } catch {
+      // Closed by default.
+    }
+  }, []);
+  const toggleAssistant = (open: boolean) => {
+    setAssistantOpen(open);
+    try {
+      window.localStorage.setItem(
+        "openprism:assistant",
+        open ? "open" : "closed",
+      );
+    } catch {
+      // Ignore.
+    }
+  };
+  // Send a message queued while the panel was still opening.
+  useEffect(() => {
+    if (assistantOpen && pendingAssistantMessage.current && assistant.current) {
+      assistant.current.send(pendingAssistantMessage.current, { fix: true });
+      pendingAssistantMessage.current = null;
+    }
+  });
+  const fixWithAi = () => {
+    if (assistant.current && assistantOpen) {
+      assistant.current.send("Fix the compile errors.", { fix: true });
+    } else {
+      pendingAssistantMessage.current = "Fix the compile errors.";
+      toggleAssistant(true);
+    }
+  };
+  const editorContext = () => {
+    const path = store.getSnapshot().active;
+    const cursor = editor.current?.cursor();
+    const selection = editor.current?.selection();
+    return {
+      activeFile: path ?? undefined,
+      cursorLine: cursor?.line,
+      selection: selection?.text ? selection.text : undefined,
+    };
+  };
   const [autoCompile, setAutoCompile] = useState(true);
   useEffect(() => setAutoCompile(readAutoCompile()), []);
 
@@ -554,6 +609,21 @@ export default function Workspace({
           )}
           Compile
         </Button>
+        <IconButton
+          label={assistantOpen ? "Hide the assistant" : "Show the assistant"}
+          onClick={() => toggleAssistant(!assistantOpen)}
+          className={assistantOpen ? "text-accent" : ""}
+        >
+          <Bot className="size-4" />
+        </IconButton>
+        <Link
+          href="/settings"
+          aria-label="Settings"
+          title="Settings"
+          className="inline-flex size-7 items-center justify-center rounded-md text-muted hover:bg-zinc-200/60 hover:text-foreground dark:hover:bg-zinc-800/60"
+        >
+          <Settings className="size-4" />
+        </Link>
         <a
           href={`/api/projects/${id}/export`}
           aria-label="Download project as ZIP"
@@ -578,7 +648,13 @@ export default function Workspace({
       )}
 
       <Group orientation="horizontal" className="min-h-0 flex-1">
-        <Panel defaultSize="18" minSize="10" collapsible className="bg-panel">
+        <Panel
+          id="files"
+          defaultSize="18"
+          minSize="10"
+          collapsible
+          className="bg-panel"
+        >
           {tree.error ? (
             <p className="p-3 text-xs text-danger">
               {errorMessage(tree.error)}
@@ -594,15 +670,28 @@ export default function Workspace({
           )}
         </Panel>
         <Separator className="w-px bg-border transition-colors hover:bg-accent data-[separator=active]:bg-accent" />
-        <Panel defaultSize="42" minSize="20">
+        <Panel id="editor" defaultSize="42" minSize="20">
           <Group orientation="vertical" className="h-full">
             <Panel minSize="20">
-              <div className="flex h-full min-h-0 flex-col">
+              <div className="relative flex h-full min-h-0 flex-col">
                 <Tabs
                   docs={snapshot.docs}
                   active={snapshot.active}
                   onSelect={(path) => store.activate(path)}
                   onClose={(path) => void store.close(path)}
+                />
+                <InlineActions
+                  projectId={id}
+                  getSelection={() => editor.current?.selection() ?? null}
+                  onReplace={(selection, text) =>
+                    editor.current?.replace(
+                      selection.from,
+                      selection.to,
+                      selection.text,
+                      text,
+                    ) ?? false
+                  }
+                  onNotice={setNotice}
                 />
                 {activeDoc?.conflict && (
                   <ConflictBanner
@@ -675,6 +764,7 @@ export default function Workspace({
               <ProblemsPanel
                 result={result}
                 logUrl={logUrl}
+                onFix={fixWithAi}
                 onSelect={(diagnostic) => {
                   if (isProjectFile(diagnostic.file))
                     void openAt(diagnostic.file, diagnostic.line ?? 1);
@@ -684,7 +774,7 @@ export default function Workspace({
           </Group>
         </Panel>
         <Separator className="w-px bg-border transition-colors hover:bg-accent data-[separator=active]:bg-accent" />
-        <Panel defaultSize="40" minSize="15">
+        <Panel id="pdf" defaultSize="40" minSize="15">
           <PdfViewer
             url={pdfUrl}
             downloadName={`${project.name}.pdf`}
@@ -692,6 +782,23 @@ export default function Workspace({
             onInverseSearch={(page, x, y) => void inverseSearch(page, x, y)}
           />
         </Panel>
+        {assistantOpen && (
+          <>
+            <Separator className="w-px bg-border transition-colors hover:bg-accent data-[separator=active]:bg-accent" />
+            <Panel id="assistant" defaultSize="28" minSize="18">
+              <AssistantPanel
+                handle={assistant}
+                projectId={id}
+                store={store}
+                editorContext={editorContext}
+                compileResult={result}
+                compiling={running}
+                onCompile={() => void compile()}
+                onOpenFile={(path) => void store.open(path)}
+              />
+            </Panel>
+          </>
+        )}
       </Group>
     </div>
   );
@@ -764,7 +871,7 @@ function Tabs({
   return (
     <div
       role="tablist"
-      className="flex h-9 shrink-0 items-end gap-px overflow-x-auto border-b border-border bg-panel px-1"
+      className="flex h-9 shrink-0 items-end gap-px overflow-x-auto border-b border-border bg-panel pr-16 pl-1"
     >
       {docs.map((doc) => {
         const selected = doc.path === active;

@@ -3,8 +3,8 @@
 An open-source LaTeX editor with AI assistance that works with **any LLM provider**. It is a
 self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
 
-> **Status: pre-alpha.** You can edit and compile LaTeX projects; the AI assistant is not
-> there yet. See the [roadmap](#roadmap).
+> **Status: pre-alpha.** You can edit and compile LaTeX projects and work with an AI
+> assistant from any provider. See the [roadmap](#roadmap).
 
 ## What works today
 
@@ -16,6 +16,30 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
   appear in the editor and in a Problems list.
 - PDF preview that keeps your place when it reloads. `Ctrl`/`⌘`-click or double-click the
   PDF to jump to the source; `Ctrl+Alt+→` in the editor highlights the line in the PDF.
+- AI assistant (the robot button): it reads the project with tools (files, search, outline,
+  compile log) and **proposes** edits, shown as word-level diffs. You accept or reject each
+  change; accepted changes go into the editor, so `Ctrl+Z` undoes them. Nothing is written
+  before you decide. "Fix with AI" in the Problems list loops compile → fix → compile.
+- Quick actions on a selection (the AI menu): rewrite, shorten, fix grammar, translate,
+  explain, or your own instruction.
+- Any provider: OpenAI, Anthropic, Gemini, OpenRouter, DeepSeek, Mistral, Groq, xAI, OpenCode
+  Go, Ollama or any OpenAI-compatible server (vLLM, LM Studio, llama.cpp). Models that cannot call tools
+  are detected and switch to SEARCH/REPLACE edits automatically. Configure them in Settings,
+  including the reasoning effort per role (off, low, medium, high, max), which can also be
+  changed per conversation. API keys stay on the server and are never sent back to the
+  browser.
+
+### Local models with Docker
+
+```sh
+docker run -d --name ollama -p 127.0.0.1:11434:11434 -e OLLAMA_CONTEXT_LENGTH=16384 \
+  -v ollama:/root/.ollama ollama/ollama
+docker exec ollama ollama pull qwen3:4b
+```
+
+Then add an *Ollama* provider in Settings (base URL `http://127.0.0.1:11434`). Set
+`OLLAMA_CONTEXT_LENGTH`: Ollama's default context of 4096 tokens silently cuts off the
+project context and the tool descriptions.
 
 ## Goals
 
@@ -65,6 +89,7 @@ just tex-pull           # once: TeX Live through Docker
 just dev                # API + web app on 127.0.0.1, prints a sign-in link
 just test               # Rust and TypeScript tests, type check
 just test docker        # also compile real documents in the TeX Live container
+cargo test -p openprism-ai --test ollama -- --ignored --nocapture   # against a local Ollama
 just lint               # what CI runs
 just gen-types          # regenerate web/lib/api/types after changing API types
 just build && just start  # production build, run locally
@@ -92,7 +117,7 @@ token on the `/login` page. Scripts can send it as `Authorization: Bearer <token
 - [x] **M0 Bootstrap**: workspace, API skeleton, access-token sign-in, API proxy, CI
 - [x] **M1 Editor and compilation**: projects, ZIP import/export, CodeMirror editor,
       latexmk/Tectonic compilation, error list, PDF preview, SyncTeX
-- [ ] **M2 AI**: provider settings, chat with project context, reviewed edits,
+- [x] **M2 AI**: provider settings, chat with project context, reviewed edits,
       "fix compile errors", fallback for models without tool calling
 - [ ] **M3 Research**: version history, literature search and verified citations,
       image/handwriting to LaTeX, inline completion

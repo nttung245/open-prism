@@ -199,4 +199,18 @@ describe("DocumentStore", () => {
     await store.refresh([""]);
     expect(store.getSnapshot().docs).toHaveLength(0);
   });
+
+  it("applies AI edits as one undoable change and reports stale anchors", async () => {
+    const { server, store } = setup();
+    server.put("main.tex", "alpha beta gamma beta");
+    const result = await store.applyEdits("main.tex", [
+      { old: "alpha", new: "ALPHA" },
+      { old: "beta", new: "x" },
+      { old: "missing", new: "y" },
+      { old: "gamma", new: "GAMMA" },
+    ]);
+    expect(result.failed).toEqual([1, 2]);
+    expect(server.files.get("main.tex")?.text).toBe("ALPHA beta GAMMA beta");
+    expect(store.getSnapshot().active).toBe("main.tex");
+  });
 });
