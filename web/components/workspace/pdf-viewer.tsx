@@ -10,6 +10,7 @@ import {
 import * as pdfjs from "pdfjs-dist";
 import {
   type MouseEvent,
+  type PointerEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -18,6 +19,13 @@ import {
 } from "react";
 import { IconButton } from "@/components/ui/button";
 import type { PdfRect } from "@/lib/api/types/PdfRect";
+import {
+  captureScale,
+  clampRect,
+  classifyGesture,
+  type Point,
+  type Rect,
+} from "@/lib/pdf/capture";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -51,13 +59,19 @@ export function PdfViewer({
   downloadName,
   highlight,
   onInverseSearch,
+  onCapture,
+  onNotice,
 }: {
   /** PDF to show; changing it keeps the old pages on screen until the new ones are ready. */
   url: string | null;
   downloadName: string;
   highlight: Highlight | null;
-  /** Double-click or Ctrl/⌘-click on a page: 1-based page and point in PDF points. */
+  /** A click on a page: 1-based page and point in PDF points. */
   onInverseSearch?: (page: number, x: number, y: number) => void;
+  /** A region dragged on a page, rendered as a PNG: 1-based page, region in PDF points. */
+  onCapture?: (capture: { page: number; rect: Rect; image: Blob }) => void;
+  /** Something to tell the user, such as a capture that failed. */
+  onNotice?: (message: string) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
   const [doc, setDoc] = useState<pdfjs.PDFDocumentProxy | null>(null);
@@ -180,6 +194,30 @@ export function PdfViewer({
     );
   };
 
+  /** Renders a region of a page again from the PDF, sharper than the screen, as a PNG. */
+  const capture = async (pageIndex: number, rect: Rect) => {
+    if (!doc || !onCapture) return;
+    try {
+      const page = await doc.getPage(pageIndex + 1);
+      const pixels = captureScale(rect, scale, window.devicePixelRatio || 1);
+      const viewport = page.getViewport({
+        scale: pixels,
+        offsetX: -rect.x * pixels,
+        offsetY: -rect.y * pixels,
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(rect.width * pixels));
+      canvas.height = Math.max(1, Math.round(rect.height * pixels));
+      await page.render({ canvas, viewport, background: "white" }).promise;
+      const image = await new Promise<Blob | null>((resolve) =>
+        canvas.toBlob(resolve, "image/png"),
+      );
+      if (image) onCapture({ page: pageIndex + 1, rect, image });
+    } catch (cause) {
+      onNotice?.(`Cannot capture this region: ${String(cause)}`);
+    }
+  };
+
   const onScroll = () => {
     const element = container.current;
     if (!element || sizes.length === 0) return;
@@ -188,20 +226,6 @@ export function PdfViewer({
     let page = 0;
     while (page + 1 < tops.length && tops[page + 1] <= middle) page += 1;
     setCurrentPage(page + 1);
-  };
-
-  const onPageClick = (
-    pageIndex: number,
-    event: MouseEvent<HTMLDivElement>,
-  ) => {
-    const isInverse = event.detail === 2 || event.ctrlKey || event.metaKey;
-    if (!isInverse || !onInverseSearch) return;
-    const box = event.currentTarget.getBoundingClientRect();
-    onInverseSearch(
-      pageIndex + 1,
-      (event.clientX - box.left) / scale,
-      (event.clientY - box.top) / scale,
-    );
   };
 
   return (
@@ -275,7 +299,10 @@ export function PdfViewer({
                   highlight?.rects.filter((r) => r.page === index + 1) ?? []
                 }
                 highlightNonce={highlight?.nonce ?? 0}
-                onClick={(event) => onPageClick(index, event)}
+                onPoint={(point) =>
+                  onInverseSearch?.(index + 1, point.x, point.y)
+                }
+                onRegion={(rect) => void capture(index, rect)}
               />
             ))}
           </div>
@@ -293,7 +320,8 @@ function PdfPage({
   root,
   rects,
   highlightNonce,
-  onClick,
+  onPoint,
+  onRegion,
 }: {
   doc: pdfjs.PDFDocumentProxy;
   index: number;
@@ -302,11 +330,93 @@ function PdfPage({
   root: React.RefObject<HTMLDivElement | null>;
   rects: PdfRect[];
   highlightNonce: number;
-  onClick: (event: MouseEvent<HTMLDivElement>) => void;
+  /** A click, at a point in PDF points. */
+  onPoint: (point: Point) => void;
+  /** A region dragged with the mouse, in PDF points. */
+  onRegion: (rect: Rect) => void;
 }) {
   const box = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const [visible, setVisible] = useState(false);
+  // The drag in progress, in CSS pixels from the page's corner.
+  const drag = useRef<{
+    start: Point;
+    dragging: boolean;
+    cancelled: boolean;
+    stop: () => void;
+  } | null>(null);
+  // The click that ends a drag (or a cancelled one) is not a click.
+  const ignoreClick = useRef(false);
+  const [selection, setSelection] = useState<Rect | null>(null);
+
+  const local = (event: { clientX: number; clientY: number }): Point => {
+    const bounds = box.current?.getBoundingClientRect();
+    return {
+      x: event.clientX - (bounds?.left ?? 0),
+      y: event.clientY - (bounds?.top ?? 0),
+    };
+  };
+
+  const onPointerDown = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || event.pointerType === "touch") return;
+    try {
+      // Keep receiving the moves when the pointer leaves the page.
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // A pointer the browser does not track (scripted events): moves over the page only.
+    }
+    // Esc cancels the drag; the page has no focus, so listen on the window.
+    const onKey = (key: KeyboardEvent) => {
+      const current = drag.current;
+      if (key.key !== "Escape" || !current) return;
+      key.preventDefault();
+      current.cancelled = true;
+      setSelection(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    drag.current = {
+      start: local(event),
+      dragging: false,
+      cancelled: false,
+      stop: () => window.removeEventListener("keydown", onKey, true),
+    };
+  };
+
+  const onPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+    const current = drag.current;
+    if (!current || current.cancelled) return;
+    const point = local(event);
+    if (!current.dragging) {
+      if (classifyGesture(current.start, point) === "click") return;
+      current.dragging = true;
+    }
+    setSelection(clampRect(current.start, point, size, scale));
+  };
+
+  const onPointerUp = (event: PointerEvent<HTMLDivElement>) => {
+    const current = drag.current;
+    if (!current) return;
+    drag.current = null;
+    current.stop();
+    setSelection(null);
+    if (current.cancelled || current.dragging) ignoreClick.current = true;
+    if (current.cancelled || !current.dragging) return;
+    const rect = clampRect(current.start, local(event), size, scale);
+    if (rect.width > 0 && rect.height > 0) onRegion(rect);
+  };
+
+  const onClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (ignoreClick.current) {
+      ignoreClick.current = false;
+      return;
+    }
+    // The second click of a double-click: the first one already went to the source.
+    if (event.detail > 1) return;
+    const point = local(event);
+    onPoint({ x: point.x / scale, y: point.y / scale });
+  };
+
+  useEffect(() => () => drag.current?.stop(), []);
 
   useEffect(() => {
     const element = box.current;
@@ -354,7 +464,11 @@ function PdfPage({
     <div
       ref={box}
       onClick={onClick}
-      className="relative bg-white shadow-sm ring-1 ring-black/5"
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      className="relative bg-white shadow-sm ring-1 ring-black/5 select-none"
       style={{ width: size.width * scale, height: size.height * scale }}
     >
       <canvas
@@ -376,6 +490,18 @@ function PdfPage({
           }}
         />
       ))}
+      {selection && (
+        <div
+          data-testid="pdf-selection"
+          className="pointer-events-none absolute border border-dashed border-accent bg-accent/10"
+          style={{
+            left: selection.x * scale,
+            top: selection.y * scale,
+            width: selection.width * scale,
+            height: selection.height * scale,
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -15,6 +15,7 @@ import {
   Square,
   Trash2,
   Wrench,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import {
@@ -28,6 +29,7 @@ import {
   useState,
 } from "react";
 import { Button, IconButton } from "@/components/ui/button";
+import { type DraftImage, imageCaption, imageUploads } from "@/lib/ai/images";
 import { parseReasoning, REASONING_OPTIONS } from "@/lib/ai/reasoning";
 import {
   ApiError,
@@ -52,9 +54,12 @@ import type { DocumentStore } from "@/lib/workspace/documents";
 import { Markdown } from "./markdown";
 import { PatchReview } from "./patch-review";
 
+/** A thumbnail in a user message: the image and where it comes from. */
+type Thumbnail = { url: string; caption: string };
+
 /** What the panel shows for the turn in progress, before it is reloaded from the server. */
 type LiveItem =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; images?: Thumbnail[] }
   | { kind: "text"; text: string }
   | { kind: "reasoning"; text: string }
   | {
@@ -87,6 +92,8 @@ export function AssistantPanel({
   compiling,
   onCompile,
   onOpenFile,
+  images,
+  onImagesChange,
   handle,
 }: {
   projectId: string;
@@ -96,6 +103,9 @@ export function AssistantPanel({
   compiling: boolean;
   onCompile: () => void;
   onOpenFile: (path: string) => void;
+  /** Images waiting to be sent with the next message (captured from the PDF). */
+  images: DraftImage[];
+  onImagesChange: (images: DraftImage[]) => void;
   handle?: Ref<AssistantHandle>;
 }) {
   const queryClient = useQueryClient();
@@ -272,7 +282,7 @@ export function AssistantPanel({
     async (
       path: (id: string) => `/api/${string}`,
       body: Record<string, unknown>,
-      userText?: string,
+      user?: { text: string; images?: Thumbnail[] },
     ) => {
       setProblem(null);
       let id = threadId;
@@ -285,7 +295,7 @@ export function AssistantPanel({
           id = created.id;
           selectThread(id);
         }
-        setLive(userText ? [{ kind: "user", text: userText }] : []);
+        setLive(user ? [{ kind: "user", ...user }] : []);
         setBusy(true);
         const controller = new AbortController();
         abort.current = controller;
@@ -327,13 +337,62 @@ export function AssistantPanel({
       void run(
         (id) => `/api/ai/threads/${id}/messages`,
         { text: trimmed },
-        trimmed,
+        { text: trimmed },
       );
     },
     [busy, run],
   );
 
   useImperativeHandle(handle, () => ({ send }), [send]);
+
+  /** Sends what is in the message box: the text and the images waiting there. */
+  const submit = useCallback(async () => {
+    const trimmed = input.trim();
+    if ((!trimmed && images.length === 0) || busy) return;
+    if (images.length === 0) {
+      send(trimmed);
+      return;
+    }
+    fixRounds.current = 0;
+    const sending = images;
+    let uploads: Awaited<ReturnType<typeof imageUploads>>;
+    try {
+      uploads = await imageUploads(sending);
+    } catch (error) {
+      setProblem(`Could not read the images: ${errorMessage(error)}`);
+      return;
+    }
+    setInput("");
+    onImagesChange([]);
+    await run(
+      (id) => `/api/ai/threads/${id}/messages`,
+      { text: trimmed, images: uploads },
+      {
+        text: trimmed,
+        images: sending.map((image) => ({
+          url: image.url,
+          caption: imageCaption(image),
+        })),
+      },
+    );
+    // The stored message shows the server's copies from now on.
+    for (const image of sending) URL.revokeObjectURL(image.url);
+  }, [input, images, busy, send, onImagesChange, run]);
+
+  const removeImage = (key: string) => {
+    const image = images.find((i) => i.key === key);
+    if (image) URL.revokeObjectURL(image.url);
+    onImagesChange(images.filter((i) => i.key !== key));
+  };
+
+  // A new capture: ready to type the question. Starts at 0 so that images captured while
+  // the panel was closed (it opens with them) count as new.
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const imageCount = useRef(0);
+  useEffect(() => {
+    if (images.length > imageCount.current) textarea.current?.focus();
+    imageCount.current = images.length;
+  }, [images.length]);
 
   const decide = useCallback(
     async (acceptAll: boolean | null) => {
@@ -404,14 +463,16 @@ export function AssistantPanel({
       {
         text: `The document still has ${errors} compile error(s). Look at compile_log and fix them.`,
       },
-      `The document still has ${errors} compile error(s). Fix them.`,
+      {
+        text: `The document still has ${errors} compile error(s). Fix them.`,
+      },
     );
   }, [compileResult, compiling, busy, run]);
 
   const onKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      send(input);
+      void submit();
     }
   };
 
@@ -501,7 +562,11 @@ export function AssistantPanel({
         ) : null}
         <ol className="flex flex-col gap-3">
           {messages.map((stored) => (
-            <MessageView key={stored.id} message={stored.message} />
+            <MessageView
+              key={stored.id}
+              message={stored.message}
+              threadId={threadId}
+            />
           ))}
           {live.map((item, index) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: live items are append-only.
@@ -543,7 +608,37 @@ export function AssistantPanel({
       </div>
 
       <div className="shrink-0 border-t border-border bg-background p-2">
+        {images.length > 0 && (
+          <ul className="mb-2 flex flex-wrap gap-2" aria-label="Images to send">
+            {images.map((image) => (
+              <li
+                key={image.key}
+                className="relative flex max-w-40 flex-col gap-0.5 rounded-md border border-border bg-panel p-1"
+              >
+                {/* biome-ignore lint/performance/noImgElement: a local object URL, not an optimisable asset. */}
+                <img
+                  src={image.url}
+                  alt={imageCaption(image) || "Captured image"}
+                  className="h-14 w-full rounded-sm bg-white object-contain"
+                />
+                <span className="truncate text-[11px] text-muted">
+                  {imageCaption(image) || "Image"}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Remove image"
+                  title="Remove image"
+                  onClick={() => removeImage(image.key)}
+                  className="absolute -top-1.5 -right-1.5 inline-flex size-5 items-center justify-center rounded-full border border-border bg-background text-muted hover:text-foreground"
+                >
+                  <X className="size-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
         <textarea
+          ref={textarea}
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={onKey}
@@ -551,7 +646,9 @@ export function AssistantPanel({
           placeholder={
             pending.length > 0
               ? "Decide on the edits above, or write a new message (rejects them)"
-              : "Ask or describe a change… (Enter to send, Shift+Enter for a new line)"
+              : images.length > 0
+                ? "Ask about the image… (Enter to send)"
+                : "Ask or describe a change… (Enter to send, Shift+Enter for a new line)"
           }
           disabled={noModel}
           className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-accent"
@@ -622,8 +719,8 @@ export function AssistantPanel({
           ) : (
             <Button
               variant="primary"
-              onClick={() => send(input)}
-              disabled={!input.trim() || noModel}
+              onClick={() => void submit()}
+              disabled={(!input.trim() && images.length === 0) || noModel}
             >
               <Send className="size-3.5" /> Send
             </Button>
@@ -727,21 +824,67 @@ function ToolChip({
   );
 }
 
-function UserBubble({ text }: { text: string }) {
+function UserBubble({
+  text,
+  images = [],
+}: {
+  text: string;
+  images?: Thumbnail[];
+}) {
   return (
-    <li className="ml-6 self-end rounded-lg bg-accent-soft px-3 py-2 text-sm whitespace-pre-wrap">
-      {text}
+    <li className="ml-6 flex flex-col items-end gap-1 self-end">
+      {images.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-1.5">
+          {images.map((image) => (
+            <a
+              key={image.url}
+              href={image.url}
+              target="_blank"
+              rel="noreferrer"
+              title={image.caption ? `${image.caption} (open)` : "Open image"}
+              className="flex max-w-40 flex-col gap-0.5 rounded-md border border-border bg-panel p-1 hover:border-accent"
+            >
+              {/* biome-ignore lint/performance/noImgElement: served by the API with its token cookie. */}
+              <img
+                src={image.url}
+                alt={image.caption || "Attached image"}
+                className="h-16 w-full rounded-sm bg-white object-contain"
+              />
+              {image.caption && (
+                <span className="truncate text-[11px] text-muted">
+                  {image.caption}
+                </span>
+              )}
+            </a>
+          ))}
+        </div>
+      )}
+      {text && (
+        <p className="rounded-lg bg-accent-soft px-3 py-2 text-sm whitespace-pre-wrap">
+          {text}
+        </p>
+      )}
     </li>
   );
 }
 
-function MessageView({ message }: { message: AiMessage }) {
+function MessageView({
+  message,
+  threadId,
+}: {
+  message: AiMessage;
+  threadId: string | null;
+}) {
   if (message.role === "user") {
     // Decisions on SEARCH/REPLACE edits are stored as user messages.
     if (/^(The user|Edit to)\b/.test(message.text)) {
       return <li className="text-xs text-muted italic">{message.text}</li>;
     }
-    return <UserBubble text={message.text} />;
+    const images = (message.images ?? []).map((image) => ({
+      url: `/api/ai/threads/${threadId}/images/${image.id}`,
+      caption: imageCaption(image),
+    }));
+    return <UserBubble text={message.text} images={images} />;
   }
   if (message.role === "tool") {
     const decisions = message.results.filter((r) => r.name === "propose_edit");
@@ -791,7 +934,7 @@ function MessageView({ message }: { message: AiMessage }) {
 function LiveView({ item }: { item: LiveItem }) {
   switch (item.kind) {
     case "user":
-      return <UserBubble text={item.text} />;
+      return <UserBubble text={item.text} images={item.images} />;
     case "text":
       return (
         <li>

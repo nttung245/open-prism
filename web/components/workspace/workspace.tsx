@@ -32,6 +32,7 @@ import { InlineActions } from "@/components/assistant/inline-actions";
 import { SuggestionsToggle } from "@/components/editor/suggestions-toggle";
 import { HistoryPanel } from "@/components/history/history-panel";
 import { Button, IconButton } from "@/components/ui/button";
+import { addImage, type DraftImage, MAX_IMAGES } from "@/lib/ai/images";
 import {
   ApiError,
   apiFetch,
@@ -58,6 +59,7 @@ import {
   joinPath,
   validateName,
 } from "@/lib/files/paths";
+import { centre, type Rect } from "@/lib/pdf/capture";
 import { DocumentStore, httpTransport } from "@/lib/workspace/documents";
 import {
   CodeEditor,
@@ -303,29 +305,74 @@ export default function Workspace({
     }
   }, [id, pdfRun, store]);
 
-  const inverseSearch = useCallback(
+  /** The source position SyncTeX gives for a point of the PDF; `null` where there is none. */
+  const findSource = useCallback(
     async (page: number, x: number, y: number) => {
-      if (!pdfRun) return;
+      if (!pdfRun) return null;
+      const query = new URLSearchParams({
+        page: String(page),
+        x: x.toFixed(2),
+        y: y.toFixed(2),
+      });
       try {
-        const query = new URLSearchParams({
-          page: String(page),
-          x: x.toFixed(2),
-          y: y.toFixed(2),
-        });
-        const found = await apiJson<InverseSearchResponse>(
+        return await apiJson<InverseSearchResponse>(
           `/api/projects/${id}/runs/${pdfRun}/synctex/inverse?${query}`,
         );
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    [id, pdfRun],
+  );
+
+  // --- capture & ask --------------------------------------------------------------------
+  // Images waiting in the assistant's message box; kept here because the panel is not
+  // mounted while it is closed.
+  const [draftImages, setDraftImages] = useState<DraftImage[]>([]);
+  const draftCount = useRef(0);
+  draftCount.current = draftImages.length;
+  const captureToChat = async (capture: {
+    page: number;
+    rect: Rect;
+    image: Blob;
+  }) => {
+    if (draftCount.current >= MAX_IMAGES) {
+      setNotice(`A message can have at most ${MAX_IMAGES} images.`);
+      return;
+    }
+    let source: DraftImage["source"];
+    try {
+      const point = centre(capture.rect);
+      const found = await findSource(capture.page, point.x, point.y);
+      if (found?.file) source = { file: found.file, line: found.line };
+    } catch {
+      // Without a source position the image still carries its page.
+    }
+    const draft: DraftImage = {
+      key: crypto.randomUUID(),
+      blob: capture.image,
+      url: URL.createObjectURL(capture.image),
+      page: capture.page,
+      source,
+    };
+    setDraftImages((current) => addImage(current, draft).images);
+    showSidebar("assistant");
+  };
+
+  const inverseSearch = useCallback(
+    async (page: number, x: number, y: number) => {
+      try {
+        const found = await findSource(page, x, y);
+        // A margin or a gap between paragraphs: nothing to show.
+        if (!found) return;
         if (found.file) await openAt(found.file, found.line, found.column);
         else setNotice("This part of the PDF comes from outside the project.");
       } catch (error) {
-        if (error instanceof ApiError && error.status === 404) {
-          setNotice("No source position here.");
-        } else {
-          setNotice(`Cannot find the source: ${errorMessage(error)}`);
-        }
+        setNotice(`Cannot find the source: ${errorMessage(error)}`);
       }
     },
-    [id, pdfRun, openAt],
+    [findSource, openAt],
   );
 
   // --- ghost text suggestions --------------------------------------------------------
@@ -855,6 +902,8 @@ export default function Workspace({
             downloadName={`${project.name}.pdf`}
             highlight={highlight}
             onInverseSearch={(page, x, y) => void inverseSearch(page, x, y)}
+            onCapture={(capture) => void captureToChat(capture)}
+            onNotice={setNotice}
           />
         </Panel>
         {sidebar === "history" && (
@@ -882,6 +931,8 @@ export default function Workspace({
                 projectId={id}
                 store={store}
                 editorContext={editorContext}
+                images={draftImages}
+                onImagesChange={setDraftImages}
                 compileResult={result}
                 compiling={running}
                 onCompile={() => void compile()}
