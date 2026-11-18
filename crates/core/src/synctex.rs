@@ -298,12 +298,7 @@ impl SyncTex {
     /// the point, the node closest to it on the page is used.
     pub fn inverse(&self, page: u32, x: f64, y: f64) -> Option<SourcePosition> {
         let sheet = self.sheets.iter().find(|sheet| sheet.page == page)?;
-        // Same arithmetic as the reference implementation (single precision, truncation).
-        let hit = Point {
-            h: i64::from(((x as f32 - self.x_offset_f32) / self.unit_f32) as i32),
-            v: i64::from(((y as f32 - self.y_offset_f32) / self.unit_f32) as i32),
-        };
-        let node = self.edit_query(sheet, hit)?;
+        let node = self.edit_query(sheet, self.hit(x, y))?;
         let node = &self.nodes[node as usize];
         let file = self.paths.get(*self.tags.get(&node.tag)?)?.clone();
         Some(SourcePosition {
@@ -311,6 +306,38 @@ impl SyncTex {
             line: u32::try_from(node.line).ok()?,
             column: u32::try_from(node.column).ok(),
         })
+    }
+
+    /// Like [`Self::inverse`], but only for a point on a line of text (an hbox) or within
+    /// `tolerance` big points of one. A point in a margin or a blank area of the page answers
+    /// nothing, instead of the closest node of the page.
+    pub fn inverse_near(
+        &self,
+        page: u32,
+        x: f64,
+        y: f64,
+        tolerance: f64,
+    ) -> Option<SourcePosition> {
+        let sheet = self.sheets.iter().find(|sheet| sheet.page == page)?;
+        let hit = self.hit(x, y);
+        let reach = i64::from((tolerance as f32 / self.unit_f32) as i32);
+        let near = sheet.hboxes.iter().any(|&hbox| {
+            self.h_ordered_distance(hit, hbox).distance.abs() <= reach
+                && self.v_ordered_distance(hit, hbox).abs() <= reach
+        });
+        if !near {
+            return None;
+        }
+        self.inverse(page, x, y)
+    }
+
+    /// A point in big points from the page's top-left corner, in the file's units. Same
+    /// arithmetic as the reference implementation (single precision, truncation).
+    fn hit(&self, x: f64, y: f64) -> Point {
+        Point {
+            h: i64::from(((x as f32 - self.x_offset_f32) / self.unit_f32) as i32),
+            v: i64::from(((y as f32 - self.y_offset_f32) / self.unit_f32) as i32),
+        }
     }
 
     // ------------------------------------------------------------------ forward search
@@ -2000,6 +2027,18 @@ mod tests {
         assert_eq!(other.line, 7);
         // Outside every line: the closest node of the page.
         assert_eq!(at(7000000.0, 30000000.0).line, 7);
+        // ... unless only points near a line count.
+        let near = |x: f64, y: f64, tolerance: f64| {
+            synctex
+                .inverse_near(1, bp(x), bp(y), tolerance)
+                .map(|p| p.line)
+        };
+        assert_eq!(near(7000000.0, 10900000.0, 8.0), Some(4));
+        assert_eq!(near(7000000.0, 30000000.0, 8.0), None);
+        // 30000000 sp is about 275 bp below the last line: a large enough tolerance reaches
+        // it again.
+        assert_eq!(near(7000000.0, 30000000.0, 300.0), Some(7));
+        assert!(synctex.inverse_near(2, 100.0, 100.0, 8.0).is_none());
         assert!(synctex.inverse(2, 100.0, 100.0).is_none());
         assert!(synctex.inverse(0, 100.0, 100.0).is_none());
         assert!(synctex.inverse(1, f64::NAN, f64::INFINITY).is_some());

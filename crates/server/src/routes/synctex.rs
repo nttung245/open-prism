@@ -88,6 +88,10 @@ async fn forward(
     Ok(Json(ForwardSearchResponse { rects }))
 }
 
+/// How far (big points) from a line of text a click still finds its source; further away, in
+/// a margin or a blank area, it finds nothing.
+const NEAR_TEXT_BP: f64 = 8.0;
+
 async fn inverse(
     State(state): State<AppState>,
     Path((id, run_id)): Path<(String, String)>,
@@ -98,7 +102,7 @@ async fn inverse(
     }
     let synctex = load(&state, &id, &run_id).await?;
     let position = synctex
-        .inverse(query.page, query.x, query.y)
+        .inverse_near(query.page, query.x, query.y, NEAR_TEXT_BP)
         .ok_or_else(|| ApiError::not_found("no source position at this point"))?;
     let root = state.paths.project_dir(&id);
     let file = RelPath::from_path(&root, &position.file).map(|rel| rel.as_str().to_owned());
