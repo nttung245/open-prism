@@ -1,0 +1,46 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"undefined-references\")"
+---
+- severity: warning
+  source: latex
+  file: ~
+  line: ~
+  message: "LaTeX Warning: Label `sec:first' multiply defined."
+  details: ""
+- severity: warning
+  source: latex
+  file: chapters/intro.tex
+  line: 5
+  message: "LaTeX Warning: Reference `sec:nowhere' on page 1 undefined on input line 5."
+  details: ""
+- severity: warning
+  source: latex
+  file: chapters/intro.tex
+  line: 6
+  message: "LaTeX Warning: Citation `knuth1984' on page 1 undefined on input line 6."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 10
+  message: "LaTeX Warning: Reference `sec:missing-main' on page 1 undefined on input line 10."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 10
+  message: "LaTeX Warning: Citation `nobody' on page 1 undefined on input line 10."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: ~
+  message: "LaTeX Warning: There were undefined references."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: ~
+  message: "LaTeX Warning: There were multiply-defined labels."
+  details: ""

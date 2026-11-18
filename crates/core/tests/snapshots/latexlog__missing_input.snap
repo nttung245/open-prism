@@ -1,0 +1,16 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"missing-input\")"
+---
+- severity: error
+  source: latex
+  file: main.tex
+  line: 5
+  message: "LaTeX Error: File `chapters/missing.tex' not found."
+  details: ""
+- severity: error
+  source: latex
+  file: main.tex
+  line: 5
+  message: Emergency stop.
+  details: "<read *>\nl.5 \\input{chapters/missing}\n                            ^^M\n*** (cannot \\read from terminal in nonstop modes)"

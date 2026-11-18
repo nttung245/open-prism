@@ -1,0 +1,9 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{localpkg}[2026/01/01 v1.0 Local test package]
+\PackageWarning{localpkg}{This is a multi-line warning\MessageBreak
+  issued while loading the package\MessageBreak
+  (with parentheses in it)}
+\newcommand{\localfail}{%
+  \PackageError{localpkg}{Something went wrong\MessageBreak in a local package}%
+    {This is the help text of the local package error.}}
+\endinput

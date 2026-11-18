@@ -2,22 +2,80 @@
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #18181b;
+  --muted: #71717a;
+  --panel: #fafafa;
+  --border: #e4e4e7;
+  --accent: #0f766e;
+  --accent-soft: #ccfbf1;
+  --danger: #b91c1c;
+  --warning: #b45309;
+
+  /* Editor syntax colours */
+  --cm-command: #1d4ed8;
+  --cm-environment: #7c3aed;
+  --cm-math: #0f766e;
+  --cm-comment: #8a8a93;
+  --cm-bracket: #52525b;
+  --cm-string: #b45309;
+  --cm-selection: #bfdbfe;
+  --cm-active-line: #f4f4f5;
+  --cm-gutter: #a1a1aa;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0b0b0d;
+    --foreground: #ececef;
+    --muted: #a1a1aa;
+    --panel: #131316;
+    --border: #27272a;
+    --accent: #2dd4bf;
+    --accent-soft: #134e4a;
+    --danger: #f87171;
+    --warning: #fbbf24;
+
+    --cm-command: #93c5fd;
+    --cm-environment: #c4b5fd;
+    --cm-math: #5eead4;
+    --cm-comment: #71717a;
+    --cm-bracket: #a1a1aa;
+    --cm-string: #fcd34d;
+    --cm-selection: #1e3a5f;
+    --cm-active-line: #17171a;
+    --cm-gutter: #52525b;
+  }
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-muted: var(--muted);
+  --color-panel: var(--panel);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-warning: var(--warning);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
+}
+
+/* SyncTeX highlight on the PDF */
+@keyframes synctex-flash {
+  0% {
+    opacity: 0.9;
+  }
+  70% {
+    opacity: 0.6;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.synctex-highlight {
+  animation: synctex-flash 3s ease-out forwards;
 }

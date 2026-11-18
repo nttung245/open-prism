@@ -1,0 +1,46 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex_and_bibtex(\"bibtex-errors\")"
+---
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 5
+  message: "LaTeX Warning: Citation `nosuchkey' on page 1 undefined on input line 5."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: ~
+  message: "LaTeX Warning: There were undefined references."
+  details: ""
+- severity: error
+  source: bibtex
+  file: refs.bib
+  line: 16
+  message: "I was expecting a `,' or a `}'"
+  details: "year   = {2020},\n(Error may have been on previous line)\nI'm skipping whatever remains of this entry"
+- severity: warning
+  source: bibtex
+  file: ~
+  line: ~
+  message: "I didn't find a database entry for \"nosuchkey\""
+  details: ""
+- severity: warning
+  source: bibtex
+  file: ~
+  line: ~
+  message: empty journal in nojournal
+  details: ""
+- severity: warning
+  source: bibtex
+  file: ~
+  line: ~
+  message: empty journal in broken
+  details: ""
+- severity: warning
+  source: bibtex
+  file: ~
+  line: ~
+  message: empty year in broken
+  details: ""

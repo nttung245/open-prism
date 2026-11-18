@@ -1,0 +1,16 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"missing-dollar\")"
+---
+- severity: error
+  source: latex
+  file: main.tex
+  line: 5
+  message: Missing $ inserted.
+  details: "<inserted text>\n                $\nl.5 The formula x^\n                  2 + y^2 = z^2 is famous.\nI've inserted a begin-math/end-math symbol since I think\nyou left one out. Proceed, with fingers crossed."
+- severity: error
+  source: latex
+  file: main.tex
+  line: 5
+  message: Missing $ inserted.
+  details: "<inserted text>\n                $\nI've inserted a begin-math/end-math symbol since I think\nyou left one out. Proceed, with fingers crossed."

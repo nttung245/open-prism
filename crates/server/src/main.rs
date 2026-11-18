@@ -1,8 +1,13 @@
 mod auth;
 mod cli;
+mod compiler;
+mod db;
 mod error;
+mod events;
+mod projects;
 mod routes;
 mod state;
+mod synctex_cache;
 
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -24,6 +29,10 @@ async fn main() -> anyhow::Result<()> {
                 .unwrap_or_else(|_| EnvFilter::new("info,tower_http=info")),
         )
         .init();
+
+    // Projects, the database and the token are private to the user running the server.
+    #[cfg(unix)]
+    nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
 
     let args = cli::Args::parse();
     let data_dir = args.resolve_data_dir()?;
@@ -53,20 +62,45 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(kind = ?engine.kind, runtime = ?engine.runtime, version = ?engine.version, "TeX engine");
     }
 
-    let app = routes::router(AppState::new(token, engines));
+    let state = AppState::open(&data_dir, token, engines).await?;
+    let _watcher = watch_files(&state)?;
+    let app = routes::router(state.clone());
 
     // Never bind beyond loopback: the Next.js server is the only public entry point.
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, args.port));
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("cannot listen on {addr}"))?;
-    tracing::info!(%addr, data_dir = %data_dir.display(), "open-prism-api listening");
+    tracing::info!(%addr, data_dir = %state.paths.root.display(), "open-prism-api listening");
     tracing::info!("sign in with the token from `open-prism-api print-token`");
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// Forwards file-system changes in project directories to the projects' event streams.
+fn watch_files(state: &AppState) -> anyhow::Result<openprism_core::watch::ProjectsWatcher> {
+    let (watcher, mut changes) = openprism_core::watch::watch_projects(
+        &state.paths.projects,
+        std::time::Duration::from_millis(150),
+    )
+    .context("cannot watch the projects directory")?;
+    let state = state.clone();
+    tokio::spawn(async move {
+        while let Some(batch) = changes.recv().await {
+            for change in batch {
+                state.events.publish(
+                    &change.project_id,
+                    events::ProjectEvent::FilesChanged {
+                        paths: change.paths.into_iter().collect(),
+                    },
+                );
+            }
+        }
+    });
+    Ok(watcher)
 }
 
 async fn shutdown_signal() {

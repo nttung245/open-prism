@@ -1,0 +1,16 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"lualatex-subfile\")"
+---
+- severity: error
+  source: latex
+  file: sections/body.tex
+  line: 3
+  message: Undefined control sequence.
+  details: "l.3 An \\undefinedlua\n                    {} command.\nThe control sequence at the end of the top line\nof your error message was never \\def'ed. If you have\nmisspelled it (e.g., `\\hobx'), type `I' and the correct\nspelling (e.g., `I\\hbox'). Otherwise just continue,\nand I'll forget about whatever was undefined."
+- severity: info
+  source: latex
+  file: sections/body.tex
+  line: 5
+  message: "Overfull \\hbox (96.31725pt too wide) detected at line 5"
+  details: "\\TU/lmr/m/n/10 An over-full box in Lu-aLa-TeX"

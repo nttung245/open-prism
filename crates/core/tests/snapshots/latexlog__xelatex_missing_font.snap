@@ -1,0 +1,22 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"xelatex-missing-font\")"
+---
+- severity: error
+  source: latex
+  file: main.tex
+  line: 4
+  message: "Package fontspec Error: The font \"NoSuchFont\" cannot be found; this may be but usually is not a fontspec bug. Either there is a typo in the font name/file, the font is not installed (correctly), or there is a bug in the underlying font loading engine (XeTeX/luaotfload)."
+  details: "A font might not be found for many reasons.\n Check the spelling, where the font is installed etc. etc."
+- severity: error
+  source: latex
+  file: main.tex
+  line: 4
+  message: "Font TU/NoSuchFont(0)/m/n/10=NoSuchFont at 10.0pt not loadable: Metric (TFM) file or installed font not found."
+  details: "<to be read again>\n                   relax\nI wasn't able to read the size data for this font,\nso I will ignore the font specification.\n[Wizards can fix TFM files using TFtoPL/PLtoTF.]\nYou might try inserting a different font spec;\ne.g., type `I\\font<same font id>=<substitute font name>'."
+- severity: warning
+  source: latex
+  file: main.tex
+  line: ~
+  message: "Missing character: There is no H (\"48) in font nullfont!"
+  details: "Missing character: There is no e (\"65) in font nullfont!\nMissing character: There is no l (\"6C) in font nullfont!\nMissing character: There is no o (\"6F) in font nullfont!\nMissing character: There is no i (\"69) in font nullfont!\nMissing character: There is no n (\"6E) in font nullfont!\nMissing character: There is no a (\"61) in font nullfont!\nMissing character: There is no f (\"66) in font nullfont!\nMissing character: There is no t (\"74) in font nullfont!\nMissing character: There is no h (\"68) in font nullfont!\nMissing character: There is no d (\"64) in font nullfont!\nMissing character: There is no s (\"73) in font nullfont!\nMissing character: There is no x (\"78) in font nullfont!\nMissing character: There is no . (\"2E) in font nullfont!\nMissing character: There is no 1 (\"31) in font nullfont!"

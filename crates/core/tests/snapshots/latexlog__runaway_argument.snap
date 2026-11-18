@@ -1,0 +1,16 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"runaway-argument\")"
+---
+- severity: error
+  source: latex
+  file: main.tex
+  line: 6
+  message: "Paragraph ended before \\shortarg was complete."
+  details: "Runaway argument?\n{an argument that is never closed\n<to be read again>\n                   \\par\nI suspect you've forgotten a `}', causing me to apply this\ncontrol sequence to too much text. How can we recover?\nMy plan is to forget the whole thing and hope for the best."
+- severity: error
+  source: latex
+  file: chapters/tail.tex
+  line: ~
+  message: "File ended while scanning use of \\textbf ."
+  details: "Runaway argument?\n{this argument never ends\n<inserted text>\n                \\par\nl.10 \\input{chapters/tail}\nI suspect you have forgotten a `}', causing me\nto read past where you wanted me to stop.\nI'll try to recover; but if the error is serious,\nyou'd better type `E' or `X' now and fix your file."

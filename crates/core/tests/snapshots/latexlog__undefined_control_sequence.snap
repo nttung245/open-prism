@@ -1,0 +1,10 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"undefined-control-sequence\")"
+---
+- severity: error
+  source: latex
+  file: main.tex
+  line: 6
+  message: Undefined control sequence.
+  details: "l.6 This line uses an \\undefinedmacro\n                                     {} that does not exist.\nThe control sequence at the end of the top line\nof your error message was never \\def'ed. If you have\nmisspelled it (e.g., `\\hobx'), type `I' and the correct\nspelling (e.g., `I\\hbox'). Otherwise just continue,\nand I'll forget about whatever was undefined."
