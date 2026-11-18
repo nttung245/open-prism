@@ -8,6 +8,7 @@ import {
   CircleCheck,
   CircleX,
   Download,
+  History,
   LoaderCircle,
   Play,
   Settings,
@@ -28,6 +29,7 @@ import {
   AssistantPanel,
 } from "@/components/assistant/assistant-panel";
 import { InlineActions } from "@/components/assistant/inline-actions";
+import { HistoryPanel } from "@/components/history/history-panel";
 import { Button, IconButton } from "@/components/ui/button";
 import {
   ApiError,
@@ -106,29 +108,24 @@ export default function Workspace({
   const nodes = useMemo(() => buildTree(tree.data?.entries ?? []), [tree.data]);
 
   const [notice, setNotice] = useState<string | null>(null);
-  const [assistantOpen, setAssistantOpen] = useState(false);
+  // The right-hand panel shows the assistant or the history, never both.
+  const [sidebar, setSidebar] = useState<Sidebar>(null);
+  const assistantOpen = sidebar === "assistant";
   const assistant = useRef<AssistantHandle>(null);
   const pendingAssistantMessage = useRef<string | null>(null);
   useEffect(() => {
-    try {
-      setAssistantOpen(
-        window.localStorage.getItem("openprism:assistant") === "open",
-      );
-    } catch {
-      // Closed by default.
-    }
+    setSidebar(loadSidebar());
   }, []);
-  const toggleAssistant = (open: boolean) => {
-    setAssistantOpen(open);
+  const showSidebar = (next: Sidebar) => {
+    setSidebar(next);
     try {
-      window.localStorage.setItem(
-        "openprism:assistant",
-        open ? "open" : "closed",
-      );
+      window.localStorage.setItem(SIDEBAR_KEY, next ?? "none");
     } catch {
-      // Ignore.
+      // Storage may be unavailable; the choice then lasts for this page only.
     }
   };
+  const toggleAssistant = (open: boolean) =>
+    showSidebar(open ? "assistant" : null);
   // Send a message queued while the panel was still opening.
   useEffect(() => {
     if (assistantOpen && pendingAssistantMessage.current && assistant.current) {
@@ -348,12 +345,16 @@ export default function Workspace({
           showResult(event.result);
         break;
       }
+      case "historyChanged":
+        void queryClient.invalidateQueries({ queryKey: ["history", id] });
+        break;
       case "resync":
         void queryClient.invalidateQueries({ queryKey: ["tree", id] });
         void queryClient.invalidateQueries({
           queryKey: ["compile-latest", id],
         });
         void store.refresh([""]);
+        void queryClient.invalidateQueries({ queryKey: ["history", id] });
         break;
     }
   };
@@ -616,6 +617,15 @@ export default function Workspace({
         >
           <Bot className="size-4" />
         </IconButton>
+        <IconButton
+          label={
+            sidebar === "history" ? "Hide the history" : "Show the history"
+          }
+          onClick={() => showSidebar(sidebar === "history" ? null : "history")}
+          className={sidebar === "history" ? "text-accent" : ""}
+        >
+          <History className="size-4" />
+        </IconButton>
         <Link
           href="/settings"
           aria-label="Settings"
@@ -782,6 +792,22 @@ export default function Workspace({
             onInverseSearch={(page, x, y) => void inverseSearch(page, x, y)}
           />
         </Panel>
+        {sidebar === "history" && (
+          <>
+            <Separator className="w-px bg-border transition-colors hover:bg-accent data-[separator=active]:bg-accent" />
+            <Panel id="history" defaultSize="28" minSize="18">
+              <HistoryPanel
+                projectId={id}
+                store={store}
+                onOpenFile={(path) => void store.open(path)}
+                onNotice={setNotice}
+                onRestored={() => {
+                  if (autoCompile) void compile();
+                }}
+              />
+            </Panel>
+          </>
+        )}
         {assistantOpen && (
           <>
             <Separator className="w-px bg-border transition-colors hover:bg-accent data-[separator=active]:bg-accent" />
@@ -802,6 +828,29 @@ export default function Workspace({
       </Group>
     </div>
   );
+}
+
+type Sidebar = "assistant" | "history" | null;
+
+const SIDEBAR_KEY = "openprism:sidebar";
+
+/** The remembered right-hand panel; reads the older `openprism:assistant` key once. */
+function loadSidebar(): Sidebar {
+  try {
+    const stored = window.localStorage.getItem(SIDEBAR_KEY);
+    if (stored === "assistant" || stored === "history") return stored;
+    if (stored === null) {
+      const legacy = window.localStorage.getItem("openprism:assistant");
+      window.localStorage.removeItem("openprism:assistant");
+      if (legacy === "open") {
+        window.localStorage.setItem(SIDEBAR_KEY, "assistant");
+        return "assistant";
+      }
+    }
+  } catch {
+    // Closed by default.
+  }
+  return null;
 }
 
 function CompileStatus({

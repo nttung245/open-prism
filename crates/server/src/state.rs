@@ -46,6 +46,8 @@ pub struct DataPaths {
     pub tex_cache: PathBuf,
     /// `tmp/`: uploads in progress.
     pub tmp: PathBuf,
+    /// `history/<id>.git`: snapshots of each project, outside the project directory.
+    pub history: PathBuf,
 }
 
 impl DataPaths {
@@ -64,6 +66,7 @@ impl DataPaths {
             runs: root.join("runs"),
             tex_cache: root.join("cache").join("tex"),
             tmp: root.join("tmp"),
+            history: root.join("history"),
             root,
         };
         for dir in [
@@ -72,6 +75,7 @@ impl DataPaths {
             &paths.runs,
             &paths.tex_cache,
             &paths.tmp,
+            &paths.history,
         ] {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("cannot create {}", dir.display()))?;
@@ -93,6 +97,10 @@ impl DataPaths {
 
     pub fn run_dir(&self, id: &str, run_id: &str) -> PathBuf {
         self.runs.join(id).join(run_id)
+    }
+
+    pub fn history_dir(&self, id: &str) -> PathBuf {
+        self.history.join(format!("{id}.git"))
     }
 }
 
@@ -137,5 +145,19 @@ impl std::ops::Deref for AppState {
 
     fn deref(&self) -> &Inner {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn prepare_creates_the_history_directory() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let paths = DataPaths::prepare(dir.path())?;
+        assert!(paths.history.is_dir());
+        assert_eq!(paths.history_dir("p1"), paths.history.join("p1.git"));
+        Ok(())
     }
 }

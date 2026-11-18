@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use openprism_core::compile::ProjectEngine;
+use openprism_core::history::SnapshotKind;
 use openprism_core::paths::RelPath;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -12,6 +13,7 @@ use uuid::Uuid;
 
 use crate::db::now_ms;
 use crate::error::ApiError;
+use crate::history;
 use crate::state::AppState;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
@@ -149,7 +151,9 @@ pub async fn create(state: &AppState, request: CreateProjectRequest) -> Result<P
         let _ = tokio::fs::remove_dir_all(&dir).await;
         return Err(ApiError::internal(err));
     }
-    insert(state, &id, &name, DEFAULT_MAIN_FILE).await
+    let project = insert(state, &id, &name, DEFAULT_MAIN_FILE).await?;
+    history::take_quietly(state, &id, SnapshotKind::Created, "Project created").await;
+    Ok(project)
 }
 
 /// Creates a project from an extracted archive directory. `extract` fills the new project
@@ -176,7 +180,9 @@ where
     match extracted {
         Ok(main_file) => {
             let main_file = main_file.unwrap_or_else(|| DEFAULT_MAIN_FILE.to_owned());
-            insert(state, &id, &name, &main_file).await
+            let project = insert(state, &id, &name, &main_file).await?;
+            history::take_quietly(state, &id, SnapshotKind::Created, "Project imported").await;
+            Ok(project)
         }
         Err(err) => {
             let _ = tokio::fs::remove_dir_all(&dir).await;
@@ -234,6 +240,7 @@ pub async fn delete(state: &AppState, id: &str) -> Result<(), ApiError> {
         state.paths.project_dir(id),
         state.paths.build_dir(id),
         state.paths.runs_dir(id),
+        state.paths.history_dir(id),
     ] {
         match tokio::fs::remove_dir_all(&dir).await {
             Ok(()) => {}

@@ -534,3 +534,156 @@ async fn inline_actions_stream_the_new_text() {
             .contains("shorter")
     );
 }
+
+async fn snapshot_kinds(app: &App, project_id: &str) -> Vec<String> {
+    let rows: Vec<String> = sqlx::query_scalar(
+        "SELECT kind FROM snapshots WHERE project_id = ? ORDER BY created_at, rowid",
+    )
+    .bind(project_id)
+    .fetch_all(&app.state.db)
+    .await
+    .unwrap();
+    rows
+}
+
+fn greet_proposal(id: &str, old: &str, new: &str) -> ResponseTemplate {
+    sse(&[
+        tool_chunk(
+            id,
+            "propose_edit",
+            json!({"path": "main.tex", "summary": "Greet the reader", "edits": [{"old": old, "new": new}]}),
+        ),
+        finish("tool_calls"),
+    ])
+}
+
+async fn pending_patch(app: &App, thread_id: &str) -> String {
+    let (_, view) = app
+        .call(Method::GET, &format!("/api/ai/threads/{thread_id}"), None)
+        .await;
+    view["patches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["status"] == "pending")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+#[tokio::test]
+async fn ai_edits_are_bracketed_by_snapshots() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(
+        &server,
+        vec![
+            greet_proposal("call_1", "Start writing here.", "Hello from the AI."),
+            sse(&[text_chunk("Done."), finish("stop")]),
+            greet_proposal("call_2", "Hello from the AI.", "Hi."),
+            sse(&[text_chunk("Kept as is."), finish("stop")]),
+        ],
+    )
+    .await;
+    let (project_id, thread_id) = setup(&app, &server).await;
+    let main_tex = app.state.paths.project_dir(&project_id).join("main.tex");
+    let messages = format!("/api/ai/threads/{thread_id}/messages");
+    let decisions = format!("/api/ai/threads/{thread_id}/decisions");
+
+    // A change made before the proposal is kept by the snapshot taken before the edit.
+    let original = std::fs::read_to_string(&main_tex).unwrap();
+    std::fs::write(&main_tex, format!("% note\n{original}")).unwrap();
+    app.call(Method::POST, &messages, Some(json!({"text": "Greet"})))
+        .await;
+    assert_eq!(
+        snapshot_kinds(&app, &project_id).await,
+        ["created", "beforeAiEdit"]
+    );
+
+    // The client applies the accepted edit and saves it before sending the decision.
+    let patch_id = pending_patch(&app, &thread_id).await;
+    let edited = std::fs::read_to_string(&main_tex)
+        .unwrap()
+        .replace("Start writing here.", "Hello from the AI.");
+    std::fs::write(&main_tex, edited).unwrap();
+    let (status, _) = app
+        .call(
+            Method::POST,
+            &decisions,
+            Some(json!({"decisions": [{"patchId": patch_id, "accepted": [true]}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, page) = app
+        .call(
+            Method::GET,
+            &format!("/api/projects/{project_id}/history"),
+            None,
+        )
+        .await;
+    assert_eq!(page["snapshots"][0]["kind"], "aiEdit");
+    assert_eq!(page["snapshots"][0]["summary"], "AI edit: Greet the reader");
+    assert_eq!(page["snapshots"][0]["modified"], 1);
+
+    // Nothing changed since: no new snapshot before this proposal, and rejecting everything
+    // takes none either.
+    app.call(Method::POST, &messages, Some(json!({"text": "Shorter"})))
+        .await;
+    let patch_id = pending_patch(&app, &thread_id).await;
+    app.call(
+        Method::POST,
+        &decisions,
+        Some(json!({"decisions": [{"patchId": patch_id, "accepted": [false]}]})),
+    )
+    .await;
+    assert_eq!(
+        snapshot_kinds(&app, &project_id).await,
+        ["created", "beforeAiEdit", "aiEdit"]
+    );
+}
+
+#[tokio::test]
+async fn a_broken_history_does_not_break_decisions() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(
+        &server,
+        vec![
+            greet_proposal("call_1", "Start writing here.", "Hello."),
+            sse(&[text_chunk("Done."), finish("stop")]),
+        ],
+    )
+    .await;
+    let (project_id, thread_id) = setup(&app, &server).await;
+    let git_dir = app.state.paths.history_dir(&project_id);
+    std::fs::remove_dir_all(&git_dir).unwrap();
+    std::fs::write(&git_dir, "not a repository").unwrap();
+
+    let (status, events) = app
+        .call(
+            Method::POST,
+            &format!("/api/ai/threads/{thread_id}/messages"),
+            Some(json!({"text": "Greet"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        events.as_array().unwrap().last().unwrap()["status"],
+        "awaitingApproval"
+    );
+    let patch_id = pending_patch(&app, &thread_id).await;
+    let (status, events) = app
+        .call(
+            Method::POST,
+            &format!("/api/ai/threads/{thread_id}/decisions"),
+            Some(json!({"decisions": [{"patchId": patch_id, "accepted": [true]}]})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        events.as_array().unwrap().last().unwrap()["status"],
+        "complete"
+    );
+    assert_eq!(snapshot_kinds(&app, &project_id).await, ["created"]);
+}

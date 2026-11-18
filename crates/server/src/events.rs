@@ -28,6 +28,8 @@ pub enum ProjectEvent {
     CompileFinished {
         result: CompileResult,
     },
+    /// A snapshot was added or a label changed: reload the history.
+    HistoryChanged,
     /// Events were dropped (slow client): reload everything.
     Resync,
 }

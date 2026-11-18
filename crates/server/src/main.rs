@@ -5,6 +5,7 @@ mod compiler;
 mod db;
 mod error;
 mod events;
+mod history;
 mod projects;
 mod routes;
 mod settings;
