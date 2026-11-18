@@ -24,6 +24,7 @@ flate2 = "1.1"
 futures-util = "0.3"
 genai = "0.7.5"
 getrandom = "0.4"
+git2 = { version = "0.21", default-features = false, features = ["vendored-libgit2"] }
 hex = "0.4"
 hmac = "0.13"
 insta = { version = "1.49", features = ["yaml"] }

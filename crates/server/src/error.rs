@@ -133,3 +133,19 @@ impl From<tokio::task::JoinError> for ApiError {
         Self::internal(err)
     }
 }
+
+impl From<openprism_core::history::HistoryError> for ApiError {
+    fn from(err: openprism_core::history::HistoryError) -> Self {
+        use openprism_core::history::HistoryError as E;
+        match err {
+            E::UnknownRevision(_) | E::NoSuchFile(_) => Self::not_found(err.to_string()),
+            E::File(err) => err.into(),
+            E::TooManyFiles => Self::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "too_many_files",
+                err.to_string(),
+            ),
+            E::Git(_) | E::Io(_) => Self::internal(err),
+        }
+    }
+}

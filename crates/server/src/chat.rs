@@ -19,6 +19,7 @@ use openprism_ai::llm::{LlmEvent, LlmRequest, Message, Model, Usage};
 use openprism_ai::patch::{Patch, PatchStatus};
 use openprism_ai::provider::ProviderKind;
 use openprism_ai::tools::{CompileSummary, ToolContext};
+use openprism_core::history::SnapshotKind;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use tokio::sync::mpsc;
@@ -30,6 +31,7 @@ use uuid::Uuid;
 use crate::compiler;
 use crate::db::now_ms;
 use crate::error::ApiError;
+use crate::history;
 use crate::projects::{self, Project};
 use crate::settings::{self, ModelRef};
 use crate::state::AppState;
@@ -430,10 +432,12 @@ async fn record_decisions(
         }
     }
 
-    let row = sqlx::query("SELECT edit_mode, pending_json FROM ai_threads WHERE id = ?")
-        .bind(thread_id)
-        .fetch_one(&state.db)
-        .await?;
+    let row =
+        sqlx::query("SELECT project_id, edit_mode, pending_json FROM ai_threads WHERE id = ?")
+            .bind(thread_id)
+            .fetch_one(&state.db)
+            .await?;
+    let project_id: String = row.try_get("project_id")?;
     let pending_json: Option<String> = row.try_get("pending_json")?;
     let message = match pending_json {
         Some(json) => {
@@ -468,6 +472,17 @@ async fn record_decisions(
         .bind(thread_id)
         .execute(&state.db)
         .await?;
+
+    // The client saved the accepted edits before sending the decisions.
+    let mut accepted: Vec<&Patch> = pending
+        .values()
+        .filter(|patch| decisions[&patch.id].accepted.iter().any(|yes| *yes))
+        .collect();
+    if !accepted.is_empty() {
+        accepted.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.id.cmp(&b.id)));
+        let summary = ai_edit_summary(&accepted);
+        history::take_quietly(state, &project_id, SnapshotKind::AiEdit, &summary).await;
+    }
     Ok(())
 }
 
@@ -689,8 +704,35 @@ async fn run_and_save(
     record_usage(state, Some(thread_id), model_ref, result.usage).await?;
 
     let status = result.status.unwrap_or(DoneStatus::Complete);
+    if status == DoneStatus::AwaitingApproval && !result.patches.is_empty() {
+        let summary = format!("Before AI edit of {}", files_of(&result.patches));
+        history::take_quietly(state, &project.id, SnapshotKind::BeforeAiEdit, &summary).await;
+    }
     let error = result.error.map(|err| (err.to_string(), err.retryable()));
     Ok((status, error))
+}
+
+/// The files of some patches, sorted and without duplicates: "main.tex, intro.tex".
+fn files_of<'a>(patches: impl IntoIterator<Item = &'a Patch>) -> String {
+    let files: std::collections::BTreeSet<&str> = patches
+        .into_iter()
+        .map(|patch| patch.file.as_str())
+        .collect();
+    files.into_iter().collect::<Vec<_>>().join(", ")
+}
+
+/// Summary of the `aiEdit` snapshot: what the model said about the accepted edits.
+fn ai_edit_summary(accepted: &[&Patch]) -> String {
+    let summaries: Vec<&str> = accepted
+        .iter()
+        .map(|patch| patch.summary.trim())
+        .filter(|summary| !summary.is_empty())
+        .collect();
+    if summaries.is_empty() {
+        format!("AI edit of {}", files_of(accepted.iter().copied()))
+    } else {
+        format!("AI edit: {}", summaries.join("; "))
+    }
 }
 
 async fn record_usage(

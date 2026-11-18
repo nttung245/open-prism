@@ -7,6 +7,7 @@ pub mod archive;
 pub mod compile;
 pub mod engines;
 pub mod files;
+pub mod history;
 pub mod latexlog;
 pub mod paths;
 pub mod synctex;

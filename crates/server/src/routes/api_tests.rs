@@ -17,26 +17,26 @@ use crate::state::AppState;
 
 const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-struct TestApp {
+pub(super) struct TestApp {
     router: Router,
-    state: AppState,
+    pub(super) state: AppState,
     _dir: tempfile::TempDir,
 }
 
-struct Reply {
-    status: StatusCode,
-    headers: HeaderMap,
-    body: Bytes,
+pub(super) struct Reply {
+    pub(super) status: StatusCode,
+    pub(super) headers: HeaderMap,
+    pub(super) body: Bytes,
 }
 
 impl Reply {
-    fn json(&self) -> Value {
+    pub(super) fn json(&self) -> Value {
         serde_json::from_slice(&self.body).unwrap_or(Value::Null)
     }
 }
 
 impl TestApp {
-    async fn new(engines: Vec<EngineInfo>) -> Self {
+    pub(super) async fn new(engines: Vec<EngineInfo>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let state = AppState::open(
             &dir.path().join("data"),
@@ -52,7 +52,7 @@ impl TestApp {
         }
     }
 
-    async fn send(&self, request: Request<Body>) -> Reply {
+    pub(super) async fn send(&self, request: Request<Body>) -> Reply {
         let response = self.router.clone().oneshot(request).await.unwrap();
         let status = response.status();
         let headers = response.headers().clone();
@@ -64,14 +64,14 @@ impl TestApp {
         }
     }
 
-    fn request(method: Method, uri: &str) -> axum::http::request::Builder {
+    pub(super) fn request(method: Method, uri: &str) -> axum::http::request::Builder {
         Request::builder()
             .method(method)
             .uri(uri)
             .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
     }
 
-    async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> Reply {
+    pub(super) async fn call(&self, method: Method, uri: &str, body: Option<Value>) -> Reply {
         let builder = Self::request(method, uri);
         let request = match body {
             Some(body) => builder
@@ -82,7 +82,7 @@ impl TestApp {
         self.send(request.unwrap()).await
     }
 
-    async fn create_project(&self, name: &str) -> String {
+    pub(super) async fn create_project(&self, name: &str) -> String {
         let reply = self
             .call(Method::POST, "/api/projects", Some(json!({ "name": name })))
             .await;
@@ -91,7 +91,7 @@ impl TestApp {
     }
 }
 
-fn multipart(parts: &[(&str, Option<&str>, &[u8])]) -> (String, Vec<u8>) {
+pub(super) fn multipart(parts: &[(&str, Option<&str>, &[u8])]) -> (String, Vec<u8>) {
     let boundary = "openprism-test-boundary";
     let mut body = Vec::new();
     for (name, file_name, data) in parts {
@@ -111,7 +111,7 @@ fn multipart(parts: &[(&str, Option<&str>, &[u8])]) -> (String, Vec<u8>) {
     (format!("multipart/form-data; boundary={boundary}"), body)
 }
 
-fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
+pub(super) fn zip_of(entries: &[(&str, &[u8])]) -> Vec<u8> {
     let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (name, data) in entries {
         zip.start_file(*name, zip::write::SimpleFileOptions::default())

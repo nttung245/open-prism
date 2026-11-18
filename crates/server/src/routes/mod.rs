@@ -7,6 +7,9 @@ mod auth;
 mod compile;
 mod files;
 mod health;
+mod history;
+#[cfg(test)]
+mod history_tests;
 mod projects;
 mod settings;
 mod synctex;
@@ -25,6 +28,7 @@ pub fn router(state: AppState) -> Router {
         .merge(projects::routes())
         .merge(files::routes())
         .merge(compile::routes())
+        .merge(history::routes())
         .merge(synctex::routes())
         .merge(settings::routes())
         .merge(ai::routes());

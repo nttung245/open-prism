@@ -142,9 +142,11 @@ impl Compiler {
             if let Err(err) = save(&state, &project_id, &result).await {
                 tracing::error!(%err, project = %project_id, "cannot save compile result");
             }
+            let finished = result.clone();
             state
                 .events
                 .publish(&project_id, ProjectEvent::CompileFinished { result });
+            crate::history::after_compile(&state, &project_id, &finished).await;
         });
         Ok(run_id)
     }
