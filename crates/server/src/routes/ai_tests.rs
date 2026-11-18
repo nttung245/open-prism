@@ -687,3 +687,220 @@ async fn a_broken_history_does_not_break_decisions() {
     );
     assert_eq!(snapshot_kinds(&app, &project_id).await, ["created"]);
 }
+
+#[tokio::test]
+async fn completions_send_only_the_text_around_the_cursor_and_never_cite() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(
+        &server,
+        vec![sse(&[
+            text_chunk(" như đã chỉ ra trong "),
+            text_chunk("\\cite{smith2020} và các nghiên cứu sau."),
+            finish("stop"),
+        ])],
+    )
+    .await;
+    let (project_id, _) = setup(&app, &server).await;
+
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/complete",
+            Some(json!({
+                "projectId": project_id, "path": "main.tex",
+                "prefix": "Kết quả này", "suffix": "\n\\end{document}",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let events = body.as_array().unwrap();
+    assert!(
+        events.iter().all(|e| !e.to_string().contains("\\\\ci")),
+        "no citation is ever shown: {body}"
+    );
+    assert_eq!(
+        events.last().unwrap(),
+        &json!({"type": "done", "text": " như đã chỉ ra trong"})
+    );
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let sent: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let user = sent["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["role"] == "user")
+        .unwrap()["content"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert!(user.contains("File: main.tex"), "{user}");
+    assert!(
+        user.contains("Kết quả này<CURSOR>\n\\end{document}"),
+        "{user}"
+    );
+    assert!(
+        sent.get("tools")
+            .is_none_or(|tools| tools.as_array().is_none_or(Vec::is_empty)),
+        "no tools are offered"
+    );
+    assert!(
+        sent["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Never add citations")
+    );
+    assert_eq!(
+        sent["reasoning_effort"], "low",
+        "the role's reasoning level"
+    );
+
+    let usage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage WHERE thread_id IS NULL")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(usage, 1);
+}
+
+#[tokio::test]
+async fn completions_stream_what_is_safe_to_show() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(
+        &server,
+        vec![sse(&[
+            text_chunk("Mô hình"),
+            text_chunk(" của chúng tôi gồm"),
+            text_chunk(" encoder"),
+            text_chunk(", decoder và \\"),
+            text_chunk("textbf{bộ nhớ}."),
+            finish("stop"),
+        ])],
+    )
+    .await;
+    let (project_id, _) = setup(&app, &server).await;
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/complete",
+            Some(json!({
+                "projectId": project_id, "path": "main.tex",
+                "prefix": "\\section{Mô hình}\nMô hình của chúng tôi", "suffix": "\n",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let events = body.as_array().unwrap();
+    let texts: Vec<&str> = events
+        .iter()
+        .filter(|e| e["type"] == "text")
+        .map(|e| e["text"].as_str().unwrap())
+        .collect();
+    let done = events.last().unwrap();
+    assert_eq!(done["type"], "done", "{body}");
+    let suggestion = done["text"].as_str().unwrap();
+    assert_eq!(suggestion, " gồm encoder, decoder và \\textbf{bộ nhớ}.");
+    // The repeat of the text before the cursor is never shown; the rest grows piece by piece.
+    assert_eq!(
+        texts,
+        [
+            " gồm",
+            " gồm encoder",
+            " gồm encoder, decoder và",
+            " gồm encoder, decoder và \\textbf{bộ nhớ}."
+        ],
+        "{body}"
+    );
+    let usage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage WHERE thread_id IS NULL")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(usage, 1);
+}
+
+#[tokio::test]
+async fn completions_report_a_refusing_provider_as_an_http_error() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({"error": {"message": "bad key"}})),
+        )
+        .mount(&server)
+        .await;
+    let (project_id, _) = setup(&app, &server).await;
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/complete",
+            Some(json!({"projectId": project_id, "path": "main.tex", "prefix": "Hello"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["error"]["code"], "ai_provider");
+}
+
+#[tokio::test]
+async fn completions_check_their_input_and_need_a_model() {
+    let app = App::new().await;
+    let (status, project) = app
+        .call(
+            Method::POST,
+            "/api/projects",
+            Some(json!({"name": "No model"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let lonely = project["id"].as_str().unwrap().to_owned();
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/complete",
+            Some(json!({"projectId": lonely, "path": "main.tex", "prefix": "Hello"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Settings")
+    );
+
+    let server = MockServer::start().await;
+    let (project_id, _) = setup(&app, &server).await;
+    let long = "x".repeat(5_000);
+    for (request, expected) in [
+        (
+            json!({"projectId": project_id, "path": "main.tex", "prefix": long}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "main.tex", "prefix": "a", "suffix": "y".repeat(1_001)}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "main.tex", "prefix": " ", "suffix": "\n"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "../x.tex", "prefix": "Hello"}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": "01a1ecad-45ba-70a8-94cd-01767fa28a2f", "path": "main.tex", "prefix": "Hello"}),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let (status, body) = app
+            .call(Method::POST, "/api/ai/complete", Some(request.clone()))
+            .await;
+        assert_eq!(status, expected, "{request} → {body}");
+    }
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "nothing reached the provider"
+    );
+}

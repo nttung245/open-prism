@@ -41,12 +41,15 @@ import {
 import { tags } from "@lezer/highlight";
 import { type Ref, useEffect, useImperativeHandle, useRef } from "react";
 import type { Diagnostic } from "@/lib/api/types/Diagnostic";
+import { type GhostHooks, ghostText } from "@/lib/editor/ghost-text-view";
 
 /** Commands the editor triggers in the workspace. */
 export type EditorActions = {
   save: () => void;
   compile: () => void;
   syncToPdf: () => void;
+  /** Ghost text suggestions: how to ask for them and when. */
+  suggest: GhostHooks;
 };
 
 export type CodeEditorHandle = {
@@ -142,6 +145,7 @@ export function createEditorState(
       syntaxHighlighting(highlightStyle),
       EditorView.lineWrapping,
       theme,
+      ghostText(() => actions.current.suggest),
       keymap.of([
         {
           key: "Mod-s",

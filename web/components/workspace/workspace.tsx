@@ -29,6 +29,7 @@ import {
   AssistantPanel,
 } from "@/components/assistant/assistant-panel";
 import { InlineActions } from "@/components/assistant/inline-actions";
+import { SuggestionsToggle } from "@/components/editor/suggestions-toggle";
 import { HistoryPanel } from "@/components/history/history-panel";
 import { Button, IconButton } from "@/components/ui/button";
 import {
@@ -38,6 +39,7 @@ import {
   errorMessage,
   fileUrl,
 } from "@/lib/api/client";
+import { streamSuggestion } from "@/lib/api/completion";
 import type { CompileResult } from "@/lib/api/types/CompileResult";
 import type { CompileStarted } from "@/lib/api/types/CompileStarted";
 import type { Diagnostic } from "@/lib/api/types/Diagnostic";
@@ -48,6 +50,7 @@ import type { Project } from "@/lib/api/types/Project";
 import type { ProjectEngine } from "@/lib/api/types/ProjectEngine";
 import type { ProjectEvent } from "@/lib/api/types/ProjectEvent";
 import type { TreeResponse } from "@/lib/api/types/TreeResponse";
+import { SuggestionCache } from "@/lib/editor/ghost-text";
 import {
   basename,
   buildTree,
@@ -159,6 +162,16 @@ export default function Workspace({
     save: () => {},
     compile: () => {},
     syncToPdf: () => {},
+    suggest: {
+      fetch: async () => "",
+      context: () => ({
+        enabled: false,
+        paused: false,
+        path: null,
+        conflict: false,
+      }),
+      cache: new SuggestionCache(),
+    },
   });
   const onSaved = useRef<(path: string) => void>(() => {});
   const [store] = useState(
@@ -315,6 +328,33 @@ export default function Workspace({
     [id, pdfRun, openAt],
   );
 
+  // --- ghost text suggestions --------------------------------------------------------
+  const [suggestionsOn, setSuggestionsOn] = useState(true);
+  useEffect(() => {
+    try {
+      setSuggestionsOn(window.localStorage.getItem(SUGGESTIONS_KEY) !== "off");
+    } catch {
+      // On by default.
+    }
+  }, []);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestError, setSuggestError] = useState<string | null>(null);
+  const [suggestionCache] = useState(() => new SuggestionCache());
+  const toggleSuggestions = () => {
+    // After an error, a click tries again.
+    if (suggestError) {
+      setSuggestError(null);
+      return;
+    }
+    const next = !suggestionsOn;
+    setSuggestionsOn(next);
+    try {
+      window.localStorage.setItem(SUGGESTIONS_KEY, next ? "on" : "off");
+    } catch {
+      // The choice then lasts for this page only.
+    }
+  };
+
   actions.current = {
     save: () => {
       const path = store.getSnapshot().active;
@@ -322,6 +362,23 @@ export default function Workspace({
     },
     compile: () => void compile(),
     syncToPdf: () => void syncToPdf(),
+    suggest: {
+      fetch: (request, signal, onText) =>
+        streamSuggestion(id, request, signal, onText),
+      context: () => {
+        const { active, docs } = store.getSnapshot();
+        const doc = docs.find((d) => d.path === active);
+        return {
+          enabled: suggestionsOn,
+          paused: suggestError !== null,
+          path: active,
+          conflict: Boolean(doc?.conflict),
+        };
+      },
+      cache: suggestionCache,
+      onLoading: setSuggestLoading,
+      onError: setSuggestError,
+    },
   };
 
   // --- live updates ------------------------------------------------------------------
@@ -690,6 +747,14 @@ export default function Workspace({
                   onSelect={(path) => store.activate(path)}
                   onClose={(path) => void store.close(path)}
                 />
+                <div className="absolute top-1 right-14 z-10">
+                  <SuggestionsToggle
+                    on={suggestionsOn}
+                    loading={suggestLoading}
+                    error={suggestError}
+                    onToggle={toggleSuggestions}
+                  />
+                </div>
                 <InlineActions
                   projectId={id}
                   getSelection={() => editor.current?.selection() ?? null}
@@ -832,6 +897,8 @@ export default function Workspace({
 
 type Sidebar = "assistant" | "history" | null;
 
+const SUGGESTIONS_KEY = "openprism:suggestions";
+
 const SIDEBAR_KEY = "openprism:sidebar";
 
 /** The remembered right-hand panel; reads the older `openprism:assistant` key once. */
@@ -920,7 +987,7 @@ function Tabs({
   return (
     <div
       role="tablist"
-      className="flex h-9 shrink-0 items-end gap-px overflow-x-auto border-b border-border bg-panel pr-16 pl-1"
+      className="flex h-9 shrink-0 items-end gap-px overflow-x-auto border-b border-border bg-panel pr-24 pl-1"
     >
       {docs.map((doc) => {
         const selected = doc.path === active;

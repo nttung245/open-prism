@@ -12,6 +12,7 @@ use crate::chat::{
     self, CreateThreadRequest, DecisionsRequest, InlineRequest, SendMessageRequest, ThreadSummary,
     ThreadView,
 };
+use crate::completion::{self, CompletionRequest};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -28,6 +29,7 @@ pub fn routes() -> Router<AppState> {
         .route("/ai/threads/{id}/messages", post(send))
         .route("/ai/threads/{id}/decisions", post(decide))
         .route("/ai/inline", post(inline))
+        .route("/ai/complete", post(complete))
 }
 
 async fn list(
@@ -84,4 +86,12 @@ async fn inline(
     Json(request): Json<InlineRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     chat::inline(&state, request).await
+}
+
+/// Server-sent `CompletionEvent`s: a suggestion to continue the text at the editor cursor.
+async fn complete(
+    State(state): State<AppState>,
+    Json(request): Json<CompletionRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    completion::complete(&state, request).await
 }
