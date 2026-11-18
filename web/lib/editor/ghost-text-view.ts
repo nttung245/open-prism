@@ -58,7 +58,8 @@ const ghostDecorations = EditorView.decorations.from(ghostField, (ghost) =>
 function suggester(hooks: () => GhostHooks) {
   return ViewPlugin.define((view) => {
     const scheduler = new SuggestionScheduler({
-      fetch: (request, signal) => hooks().fetch(request, signal),
+      fetch: (request, signal, onText) =>
+        hooks().fetch(request, signal, onText),
       context: () => hooks().context(),
       cache: {
         get: (request) => hooks().cache.get(request),
@@ -72,13 +73,13 @@ function suggester(hooks: () => GhostHooks) {
     return {
       scheduler,
       update(update: ViewUpdate) {
-        if (!update.docChanged && !update.selectionSet) return;
+        const changed = update.docChanged || update.selectionSet;
         // Text being composed with an input method is not in the document yet.
-        if (update.view.composing) {
+        if (changed && update.view.composing) {
           scheduler.cancel();
           return;
         }
-        scheduler.onChange(update.state);
+        scheduler.update(update.startState, update.state, changed);
       },
       destroy() {
         scheduler.cancel();

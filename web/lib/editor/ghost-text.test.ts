@@ -185,26 +185,55 @@ describe("SuggestionScheduler", () => {
     vi.useRealTimers();
   });
 
-  function setup(answer: (request: SuggestionRequest) => Promise<string>) {
+  function setup(
+    answer: (
+      request: SuggestionRequest,
+      onText: (text: string) => void,
+    ) => Promise<string>,
+  ) {
     let state = stateWith("Our model ");
-    const shown: Ghost[] = [];
+    const shown: (Ghost | null)[] = [];
     const errors: string[] = [];
     const signals: AbortSignal[] = [];
-    const fetch = vi.fn((request: SuggestionRequest, signal: AbortSignal) => {
-      signals.push(signal);
-      return answer(request);
-    });
-    const scheduler = new SuggestionScheduler({
+    const fetch = vi.fn(
+      (
+        request: SuggestionRequest,
+        signal: AbortSignal,
+        onText: (text: string) => void,
+      ) => {
+        signals.push(signal);
+        return answer(request, onText);
+      },
+    );
+    // Like the view plugin: every transaction goes through `update`.
+    const dispatch = (spec: TransactionSpec) => {
+      const tr = state.update(spec);
+      const before = state;
+      state = tr.state;
+      scheduler.update(
+        before,
+        state,
+        tr.docChanged || tr.selection !== undefined,
+      );
+    };
+    const scheduler: SuggestionScheduler = new SuggestionScheduler({
       fetch,
       context: () => context,
       currentState: () => state,
-      show: (ghost) => shown.push(ghost),
+      show: (ghost) => {
+        shown.push(ghost);
+        dispatch({ effects: setGhost.of(ghost) });
+      },
       cache: new SuggestionCache(),
       onError: (message) => errors.push(message),
     });
     const edit = (text: string) => {
-      state = type(state, text);
-      scheduler.onChange(state);
+      const pos = state.selection.main.head;
+      dispatch({
+        changes: { from: pos, insert: text },
+        selection: EditorSelection.cursor(pos + text.length),
+        userEvent: "input.type",
+      });
     };
     return {
       scheduler,
@@ -213,11 +242,30 @@ describe("SuggestionScheduler", () => {
       errors,
       signals,
       edit,
+      dispatch,
       get state() {
         return state;
       },
       set state(next: EditorState) {
         state = next;
+      },
+    };
+  }
+
+  /** An answer written piece by piece: `write` sends the suggestion so far, `end` the whole. */
+  function streamed() {
+    let onText: (text: string) => void = () => {};
+    let resolve: (text: string) => void = () => {};
+    return {
+      answer: (_: SuggestionRequest, send: (text: string) => void) =>
+        new Promise<string>((done) => {
+          onText = send;
+          resolve = done;
+        }),
+      write: (text: string) => onText(text),
+      end: async (text: string) => {
+        resolve(text);
+        await vi.advanceTimersByTimeAsync(0);
       },
     };
   }
@@ -312,5 +360,95 @@ describe("SuggestionScheduler", () => {
     expect(request.suffix).toBe(after.slice(0, MAX_SUFFIX));
     // An empty answer shows nothing.
     expect(t.shown).toEqual([]);
+  });
+
+  it("shows a suggestion while it is written", async () => {
+    const model = streamed();
+    const t = setup(model.answer);
+    t.edit("gồm");
+    await vi.advanceTimersByTimeAsync(600);
+    const pos = "Our model gồm".length;
+    model.write(" encoder");
+    expect(t.state.field(ghostField)).toEqual({ pos, text: " encoder" });
+    model.write(" encoder, decoder");
+    expect(t.state.field(ghostField)).toEqual({
+      pos,
+      text: " encoder, decoder",
+    });
+    await model.end(" encoder, decoder và bộ nhớ.");
+    expect(t.state.field(ghostField)).toEqual({
+      pos,
+      text: " encoder, decoder và bộ nhớ.",
+    });
+    expect(t.signals[0].aborted).toBe(false);
+  });
+
+  it("keeps a suggestion coming while the writer types it", async () => {
+    const model = streamed();
+    const t = setup(model.answer);
+    t.edit("gồm");
+    await vi.advanceTimersByTimeAsync(600);
+    model.write(" encoder");
+    t.edit(" enc");
+    expect(t.signals[0].aborted).toBe(false);
+    const pos = "Our model gồm enc".length;
+    expect(t.state.field(ghostField)).toEqual({ pos, text: "oder" });
+    model.write(" encoder, decoder");
+    expect(t.state.field(ghostField)).toEqual({ pos, text: "oder, decoder" });
+    await model.end(" encoder, decoder và bộ nhớ.");
+    expect(t.state.field(ghostField)).toEqual({
+      pos,
+      text: "oder, decoder và bộ nhớ.",
+    });
+    expect(t.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a suggestion being written when it is accepted, dismissed or typed over", async () => {
+    const actions: Record<string, (t: ReturnType<typeof setup>) => void> = {
+      Tab: (t) => {
+        const spec = acceptGhost(t.state);
+        if (spec) t.dispatch(spec);
+      },
+      Esc: (t) => {
+        const spec = dismissGhost(t.state);
+        if (spec) t.dispatch(spec);
+      },
+      "other text": (t) => t.edit("X"),
+      "cursor moved": (t) =>
+        t.dispatch({ selection: EditorSelection.cursor(0) }),
+    };
+    for (const [name, act] of Object.entries(actions)) {
+      const model = streamed();
+      const t = setup(model.answer);
+      t.edit("gồm");
+      await vi.advanceTimersByTimeAsync(600);
+      model.write(" encoder");
+      act(t);
+      expect(t.signals[0].aborted, name).toBe(true);
+      const count = t.shown.length;
+      model.write(" encoder, decoder");
+      await model.end(" encoder, decoder và bộ nhớ.");
+      expect(t.shown, name).toHaveLength(count);
+      if (name === "Tab") {
+        // Tab takes what was shown.
+        expect(t.state.doc.toString()).toBe("Our model gồm encoder");
+      }
+      // Nothing half written was cached: the same place asks again.
+      t.state = stateWith("Our model gồm");
+      t.scheduler.requestNow(t.state);
+      expect(t.fetch, name).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it("removes what was shown when the whole suggestion is empty", async () => {
+    const model = streamed();
+    const t = setup(model.answer);
+    t.edit("gồm");
+    await vi.advanceTimersByTimeAsync(600);
+    model.write(" encoder");
+    expect(t.state.field(ghostField)).not.toBeNull();
+    await model.end("");
+    expect(t.state.field(ghostField)).toBeNull();
+    expect(t.shown.at(-1)).toBeNull();
   });
 });

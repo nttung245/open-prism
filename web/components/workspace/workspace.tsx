@@ -39,9 +39,9 @@ import {
   errorMessage,
   fileUrl,
 } from "@/lib/api/client";
+import { streamSuggestion } from "@/lib/api/completion";
 import type { CompileResult } from "@/lib/api/types/CompileResult";
 import type { CompileStarted } from "@/lib/api/types/CompileStarted";
-import type { CompletionResponse } from "@/lib/api/types/CompletionResponse";
 import type { Diagnostic } from "@/lib/api/types/Diagnostic";
 import type { FileOperation } from "@/lib/api/types/FileOperation";
 import type { ForwardSearchResponse } from "@/lib/api/types/ForwardSearchResponse";
@@ -363,12 +363,8 @@ export default function Workspace({
     compile: () => void compile(),
     syncToPdf: () => void syncToPdf(),
     suggest: {
-      fetch: (request, signal) =>
-        apiJson<CompletionResponse>("/api/ai/complete", {
-          method: "POST",
-          json: { projectId: id, ...request },
-          signal,
-        }).then((response) => response.text),
+      fetch: (request, signal, onText) =>
+        streamSuggestion(id, request, signal, onText),
       context: () => {
         const { active, docs } = store.getSnapshot();
         const doc = docs.find((d) => d.path === active);

@@ -202,20 +202,31 @@ export class SuggestionCache {
 }
 
 export type SchedulerOptions = {
-  fetch: (request: SuggestionRequest, signal: AbortSignal) => Promise<string>;
+  /** Asks for a suggestion: calls `onText` with the suggestion so far while it is written,
+   * and resolves with the whole suggestion. */
+  fetch: (
+    request: SuggestionRequest,
+    signal: AbortSignal,
+    onText: (text: string) => void,
+  ) => Promise<string>;
   context: () => SuggestContext;
   /** The editor state now, to drop results for a position that is gone. */
   currentState: () => EditorState;
-  show: (ghost: Ghost) => void;
+  /** Shows a suggestion, or removes it (`null`). */
+  show: (ghost: Ghost | null) => void;
   cache: Pick<SuggestionCache, "get" | "set">;
   onLoading?: (loading: boolean) => void;
   onError?: (message: string) => void;
   delayMs?: number;
 };
 
+/** Where a request was made. */
+type Origin = { doc: Text; pos: number };
+
 /**
- * Asks for suggestions: after a pause in typing, one request at a time, cancelled as soon as
- * the document or the cursor changes, with recent answers cached.
+ * Asks for suggestions: after a pause in typing, one request at a time, shown while they are
+ * written, cancelled as soon as the writer does anything but type the suggestion, with recent
+ * answers cached.
  */
 export class SuggestionScheduler {
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -223,11 +234,26 @@ export class SuggestionScheduler {
 
   constructor(private readonly options: SchedulerOptions) {}
 
+  /**
+   * After an editor update (`changed` when the document or the cursor changed). A suggestion
+   * that went away (accepted, dismissed, typed over) stops its request.
+   */
+  update(startState: EditorState, state: EditorState, changed: boolean) {
+    if (
+      startState.field(ghostField, false) &&
+      !state.field(ghostField, false)
+    ) {
+      this.cancel();
+    }
+    if (changed) this.onChange(state);
+  }
+
   /** The document or the cursor changed. */
   onChange(state: EditorState) {
-    this.cancel();
-    // A suggestion is still shown (the writer is typing it): nothing to ask.
+    // A suggestion is still shown (the writer is typing it): nothing to ask, and one still
+    // being written keeps coming.
     if (state.field(ghostField, false)) return;
+    this.cancel();
     if (!shouldSuggest(state, this.options.context())) return;
     this.timer = setTimeout(
       () => void this.run(state),
@@ -247,9 +273,14 @@ export class SuggestionScheduler {
     this.timer = null;
     if (this.controller) {
       this.controller.abort();
-      this.controller = null;
-      this.options.onLoading?.(false);
+      this.finish(this.controller);
     }
+  }
+
+  private finish(controller: AbortController) {
+    if (this.controller !== controller) return;
+    this.controller = null;
+    this.options.onLoading?.(false);
   }
 
   private async run(state: EditorState) {
@@ -257,38 +288,61 @@ export class SuggestionScheduler {
     const path = this.options.context().path;
     if (!path) return;
     const request = { path, ...textAround(state) };
-    const doc = state.doc;
-    const pos = state.selection.main.head;
+    const origin = { doc: state.doc, pos: state.selection.main.head };
     const cached = this.options.cache.get(request);
     if (cached !== undefined) {
-      this.present(doc, pos, cached);
+      this.present(origin, cached, true);
       return;
     }
     const controller = new AbortController();
     this.controller = controller;
     this.options.onLoading?.(true);
     try {
-      const text = await this.options.fetch(request, controller.signal);
+      const text = await this.options.fetch(
+        request,
+        controller.signal,
+        (partial) => {
+          if (!controller.signal.aborted) this.present(origin, partial, false);
+        },
+      );
       if (controller.signal.aborted) return;
+      this.finish(controller);
       this.options.cache.set(request, text);
-      this.present(doc, pos, text);
+      this.present(origin, text, true);
     } catch (error) {
       if (controller.signal.aborted) return;
       this.options.onError?.(
         error instanceof Error ? error.message : String(error),
       );
     } finally {
-      if (this.controller === controller) {
-        this.controller = null;
-        this.options.onLoading?.(false);
-      }
+      this.finish(controller);
     }
   }
 
-  private present(doc: Text, pos: number, text: string) {
-    if (!text) return;
+  /**
+   * Shows `text`, the suggestion for `origin` so far (`final` once complete), after what the
+   * writer has typed of it since.
+   */
+  private present(origin: Origin, text: string, final: boolean) {
     const now = this.options.currentState();
-    if (now.doc !== doc || now.selection.main.head !== pos) return;
-    this.options.show({ pos, text });
+    const { head, empty } = now.selection.main;
+    const ghost = now.field(ghostField, false) ?? null;
+    let pos = origin.pos;
+    let rest = text;
+    if (now.doc !== origin.doc) {
+      // Only typing the suggestion shown keeps it (any other change removes it).
+      if (!ghost || ghost.pos <= origin.pos) return;
+      const typed = now.doc.sliceString(origin.pos, ghost.pos);
+      if (!text.startsWith(typed)) return;
+      pos = ghost.pos;
+      rest = text.slice(typed.length);
+    }
+    if (!empty || head !== pos) return;
+    if (rest) {
+      this.options.show({ pos, text: rest });
+    } else if (final && ghost) {
+      // Nothing left to suggest.
+      this.options.show(null);
+    }
   }
 }

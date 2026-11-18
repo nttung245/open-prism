@@ -24,11 +24,12 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
   explain, or your own instruction.
 - Suggestions as you type: pause in a `.tex` file and the fast model proposes how to go on
   (the rest of the sentence, the next `\item`, a missing `\end{…}`), shown in grey at the
-  cursor. `Tab` accepts it, `Ctrl+→` (`Alt+→` on macOS) takes one word, `Esc` dismisses it,
-  `Alt+\` asks right away; keep typing and it follows along. Only the text around the cursor
-  is sent, and a suggestion never contains a citation: references are yours to add. The wand
-  button next to "AI" turns suggestions off. Set the fast role's reasoning to "off" in
-  Settings for suggestions in well under a second.
+  cursor as the model writes it. `Tab` accepts it, `Ctrl+→` (`Alt+→` on macOS) takes one
+  word, `Esc` dismisses it, `Alt+\` asks right away; keep typing and it follows along. Only
+  the text around the cursor is sent, and a suggestion never contains a citation: references
+  are yours to add. The wand button next to "AI" turns suggestions off. Set the fast role's
+  reasoning to "off" in Settings for the quickest suggestions; how soon they appear depends
+  mostly on how fast the provider starts answering.
 - Version history (the clock button). A version is saved when the project is created or
   imported, before and after you accept AI edits, after a successful compile (at most every
   ten minutes) and around every restore; "Save version…" saves one with a label. Each

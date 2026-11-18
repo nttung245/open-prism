@@ -12,7 +12,7 @@ use crate::chat::{
     self, CreateThreadRequest, DecisionsRequest, InlineRequest, SendMessageRequest, ThreadSummary,
     ThreadView,
 };
-use crate::completion::{self, CompletionRequest, CompletionResponse};
+use crate::completion::{self, CompletionRequest};
 use crate::error::ApiError;
 use crate::state::AppState;
 
@@ -88,10 +88,10 @@ async fn inline(
     chat::inline(&state, request).await
 }
 
-/// A suggestion to continue the text at the editor cursor.
+/// Server-sent `CompletionEvent`s: a suggestion to continue the text at the editor cursor.
 async fn complete(
     State(state): State<AppState>,
     Json(request): Json<CompletionRequest>,
-) -> Result<Json<CompletionResponse>, ApiError> {
-    Ok(Json(completion::complete(&state, request).await?))
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    completion::complete(&state, request).await
 }

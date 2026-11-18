@@ -714,7 +714,15 @@ async fn completions_send_only_the_text_around_the_cursor_and_never_cite() {
         )
         .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["text"], " như đã chỉ ra trong");
+    let events = body.as_array().unwrap();
+    assert!(
+        events.iter().all(|e| !e.to_string().contains("\\\\ci")),
+        "no citation is ever shown: {body}"
+    );
+    assert_eq!(
+        events.last().unwrap(),
+        &json!({"type": "done", "text": " như đã chỉ ra trong"})
+    );
 
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
@@ -754,6 +762,84 @@ async fn completions_send_only_the_text_around_the_cursor_and_never_cite() {
         .await
         .unwrap();
     assert_eq!(usage, 1);
+}
+
+#[tokio::test]
+async fn completions_stream_what_is_safe_to_show() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(
+        &server,
+        vec![sse(&[
+            text_chunk("Mô hình"),
+            text_chunk(" của chúng tôi gồm"),
+            text_chunk(" encoder"),
+            text_chunk(", decoder và \\"),
+            text_chunk("textbf{bộ nhớ}."),
+            finish("stop"),
+        ])],
+    )
+    .await;
+    let (project_id, _) = setup(&app, &server).await;
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/complete",
+            Some(json!({
+                "projectId": project_id, "path": "main.tex",
+                "prefix": "\\section{Mô hình}\nMô hình của chúng tôi", "suffix": "\n",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let events = body.as_array().unwrap();
+    let texts: Vec<&str> = events
+        .iter()
+        .filter(|e| e["type"] == "text")
+        .map(|e| e["text"].as_str().unwrap())
+        .collect();
+    let done = events.last().unwrap();
+    assert_eq!(done["type"], "done", "{body}");
+    let suggestion = done["text"].as_str().unwrap();
+    assert_eq!(suggestion, " gồm encoder, decoder và \\textbf{bộ nhớ}.");
+    // The repeat of the text before the cursor is never shown; the rest grows piece by piece.
+    assert_eq!(
+        texts,
+        [
+            " gồm",
+            " gồm encoder",
+            " gồm encoder, decoder và",
+            " gồm encoder, decoder và \\textbf{bộ nhớ}."
+        ],
+        "{body}"
+    );
+    let usage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage WHERE thread_id IS NULL")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(usage, 1);
+}
+
+#[tokio::test]
+async fn completions_report_a_refusing_provider_as_an_http_error() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({"error": {"message": "bad key"}})),
+        )
+        .mount(&server)
+        .await;
+    let (project_id, _) = setup(&app, &server).await;
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/complete",
+            Some(json!({"projectId": project_id, "path": "main.tex", "prefix": "Hello"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["error"]["code"], "ai_provider");
 }
 
 #[tokio::test]
