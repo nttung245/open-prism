@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import {
+  type SetStateAction,
   useCallback,
   useEffect,
   useMemo,
@@ -32,7 +33,8 @@ import { InlineActions } from "@/components/assistant/inline-actions";
 import { SuggestionsToggle } from "@/components/editor/suggestions-toggle";
 import { HistoryPanel } from "@/components/history/history-panel";
 import { Button, IconButton } from "@/components/ui/button";
-import { addImage, type DraftImage, MAX_IMAGES } from "@/lib/ai/images";
+import { addImages, type DraftImage, MAX_IMAGES } from "@/lib/ai/images";
+import { prepareImage } from "@/lib/ai/prepare-image";
 import {
   ApiError,
   apiFetch,
@@ -330,14 +332,98 @@ export default function Workspace({
   // Images waiting in the assistant's message box; kept here because the panel is not
   // mounted while it is closed.
   const [draftImages, setDraftImages] = useState<DraftImage[]>([]);
-  const draftCount = useRef(0);
-  draftCount.current = draftImages.length;
+  const draftImagesRef = useRef<DraftImage[]>([]);
+  const [preparingImages, setPreparingImages] = useState(0);
+  const [imageProblem, setImageProblem] = useState<string | null>(null);
+  const imageWork = useRef({
+    active: true,
+    pending: 0,
+    urls: new Set<string>(),
+  });
+  useEffect(() => {
+    const work = imageWork.current;
+    work.active = true;
+    return () => {
+      work.active = false;
+      for (const image of draftImagesRef.current)
+        URL.revokeObjectURL(image.url);
+      draftImagesRef.current = [];
+      for (const url of work.urls) URL.revokeObjectURL(url);
+      work.urls.clear();
+    };
+  }, []);
+  // Removing or sending images: what was said about the last ones added no longer applies.
+  const changeDraftImages = useCallback(
+    (change: SetStateAction<DraftImage[]>) => {
+      const next =
+        typeof change === "function" ? change(draftImagesRef.current) : change;
+      draftImagesRef.current = next;
+      setDraftImages(next);
+      setImageProblem(null);
+    },
+    [],
+  );
+  const addDraftImages = useCallback((incoming: DraftImage[]) => {
+    const result = addImages(draftImagesRef.current, incoming);
+    draftImagesRef.current = result.images;
+    setDraftImages(result.images);
+    return result;
+  }, []);
+  const addFilesToDraft = useCallback(
+    async (files: File[], pasted = false) => {
+      const work = imageWork.current;
+      if (!work.active || files.length === 0) return;
+      if (work.pending === 0) setImageProblem(null);
+      work.pending += 1;
+      setPreparingImages(work.pending);
+      const incoming: DraftImage[] = [];
+      const problems: string[] = [];
+      try {
+        // Keep files in their selected order, even if some cannot be decoded.
+        for (const file of files) {
+          const name = pasted ? "Pasted image" : file.name || "Image";
+          try {
+            const prepared = await prepareImage(file, name);
+            if (!work.active) return;
+            const key = crypto.randomUUID();
+            const url = URL.createObjectURL(prepared.blob);
+            work.urls.add(url);
+            incoming.push({ ...prepared, key, url });
+          } catch (error) {
+            if (!work.active) return;
+            problems.push(`${name}: ${errorMessage(error)}`);
+          }
+        }
+        if (!work.active) return;
+        const result = addDraftImages(incoming);
+        for (const image of incoming.slice(0, result.added))
+          work.urls.delete(image.url);
+        if (result.skipped) {
+          problems.push(
+            `Added ${result.added} of ${incoming.length} images (maximum ${MAX_IMAGES}).`,
+          );
+        }
+        if (problems.length) {
+          setImageProblem((current) =>
+            [current, ...problems].filter(Boolean).join(" "),
+          );
+        }
+      } finally {
+        for (const image of incoming) {
+          if (work.urls.delete(image.url)) URL.revokeObjectURL(image.url);
+        }
+        work.pending -= 1;
+        if (work.active) setPreparingImages(work.pending);
+      }
+    },
+    [addDraftImages],
+  );
   const captureToChat = async (capture: {
     page: number;
     rect: Rect;
     image: Blob;
   }) => {
-    if (draftCount.current >= MAX_IMAGES) {
+    if (draftImagesRef.current.length >= MAX_IMAGES) {
       setNotice(`A message can have at most ${MAX_IMAGES} images.`);
       return;
     }
@@ -349,6 +435,7 @@ export default function Workspace({
     } catch {
       // Without a source position the image still carries its page.
     }
+    if (!imageWork.current.active) return;
     const draft: DraftImage = {
       key: crypto.randomUUID(),
       blob: capture.image,
@@ -356,7 +443,11 @@ export default function Workspace({
       page: capture.page,
       source,
     };
-    setDraftImages((current) => addImage(current, draft).images);
+    if (!addDraftImages([draft]).added) {
+      URL.revokeObjectURL(draft.url);
+      setNotice(`A message can have at most ${MAX_IMAGES} images.`);
+      return;
+    }
     showSidebar("assistant");
   };
 
@@ -932,7 +1023,10 @@ export default function Workspace({
                 store={store}
                 editorContext={editorContext}
                 images={draftImages}
-                onImagesChange={setDraftImages}
+                onImagesChange={changeDraftImages}
+                onFilesAdd={addFilesToDraft}
+                preparingImages={preparingImages}
+                imageProblem={imageProblem}
                 compileResult={result}
                 compiling={running}
                 onCompile={() => void compile()}
