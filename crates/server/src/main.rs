@@ -7,6 +7,7 @@ mod db;
 mod error;
 mod events;
 mod history;
+mod images;
 mod projects;
 mod routes;
 mod settings;

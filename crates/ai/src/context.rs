@@ -50,7 +50,10 @@ pub fn system_prompt(input: &PromptInput<'_>) -> String {
          - Answer in the language the user writes in. Be concise.\n\
          - Write LaTeX that compiles. Keep the author's style and change only what is needed.\n\
          - You cannot change files yourself: you propose edits and the user accepts or \
-         rejects them. Never say a change was made before the user accepted it.\n",
+         rejects them. Never say a change was made before the user accepted it.\n\
+         - The user may attach images, such as regions captured from the compiled PDF. Each \
+         comes with its page and the source position SyncTeX gives for it, which can be a few \
+         lines off: read the file around that position before proposing an edit.\n",
         input.project_name
     ));
     match input.mode {

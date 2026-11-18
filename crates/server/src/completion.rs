@@ -114,12 +114,10 @@ pub async fn complete(
     let model = settings::model(state, &model_ref).await?;
     let llm_request = LlmRequest {
         system: SYSTEM.to_owned(),
-        messages: vec![Message::User {
-            text: format!(
-                "File: {path}\n<document>\n{}{CURSOR}{}\n</document>\nWrite the text to insert at {CURSOR}.",
-                request.prefix, request.suffix
-            ),
-        }],
+        messages: vec![Message::user(format!(
+            "File: {path}\n<document>\n{}{CURSOR}{}\n</document>\nWrite the text to insert at {CURSOR}.",
+            request.prefix, request.suffix
+        ))],
         tools: Vec::new(),
         max_tokens: Some(MAX_TOKENS),
         reasoning: model_ref.reasoning,

@@ -48,6 +48,8 @@ pub struct DataPaths {
     pub tmp: PathBuf,
     /// `history/<id>.git`: snapshots of each project, outside the project directory.
     pub history: PathBuf,
+    /// `attachments/<project>/<thread>/`: images sent in AI conversations.
+    pub attachments: PathBuf,
 }
 
 impl DataPaths {
@@ -67,6 +69,7 @@ impl DataPaths {
             tex_cache: root.join("cache").join("tex"),
             tmp: root.join("tmp"),
             history: root.join("history"),
+            attachments: root.join("attachments"),
             root,
         };
         for dir in [
@@ -76,6 +79,7 @@ impl DataPaths {
             &paths.tex_cache,
             &paths.tmp,
             &paths.history,
+            &paths.attachments,
         ] {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("cannot create {}", dir.display()))?;
@@ -101,6 +105,16 @@ impl DataPaths {
 
     pub fn history_dir(&self, id: &str) -> PathBuf {
         self.history.join(format!("{id}.git"))
+    }
+
+    /// Images of a project's AI conversations.
+    pub fn attachments_dir(&self, project_id: &str) -> PathBuf {
+        self.attachments.join(project_id)
+    }
+
+    /// Images of one AI conversation.
+    pub fn thread_attachments_dir(&self, project_id: &str, thread_id: &str) -> PathBuf {
+        self.attachments_dir(project_id).join(thread_id)
     }
 }
 

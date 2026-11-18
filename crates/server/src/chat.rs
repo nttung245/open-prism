@@ -32,6 +32,7 @@ use crate::compiler;
 use crate::db::now_ms;
 use crate::error::ApiError;
 use crate::history;
+use crate::images::{self, ImageUpload};
 use crate::projects::{self, Project};
 use crate::settings::{self, ModelRef};
 use crate::state::AppState;
@@ -87,7 +88,13 @@ pub struct CreateThreadRequest {
 #[serde(rename_all = "camelCase")]
 #[ts(export)]
 pub struct SendMessageRequest {
+    /// May be empty when the message has images.
+    #[serde(default)]
     pub text: String,
+    /// Images sent with the text (at most 4).
+    #[serde(default)]
+    #[ts(as = "Option<Vec<ImageUpload>>", optional)]
+    pub images: Vec<ImageUpload>,
     #[serde(default)]
     #[ts(optional)]
     pub editor: Option<EditorContext>,
@@ -215,11 +222,19 @@ pub async fn thread(state: &AppState, id: &str) -> Result<ThreadSummary, ApiErro
 }
 
 pub async fn delete_thread(state: &AppState, id: &str) -> Result<(), ApiError> {
-    thread(state, id).await?;
+    let summary = thread(state, id).await?;
     sqlx::query("DELETE FROM ai_threads WHERE id = ?")
         .bind(id)
         .execute(&state.db)
         .await?;
+    let dir = state.paths.thread_attachments_dir(&summary.project_id, id);
+    match tokio::fs::remove_dir_all(&dir).await {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => {
+            tracing::warn!(dir = %dir.display(), %err, "cannot remove the images of a conversation")
+        }
+    }
     Ok(())
 }
 
@@ -352,7 +367,8 @@ pub async fn send_message(
     request: SendMessageRequest,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
     let text = request.text.trim().to_owned();
-    if text.is_empty() {
+    let images = images::check(request.images)?;
+    if text.is_empty() && images.is_empty() {
         return Err(ApiError::bad_request("the message is empty"));
     }
     let prepared = prepare(state, thread_id, request.model, request.editor).await?;
@@ -374,8 +390,24 @@ pub async fn send_message(
             .collect();
         record_decisions(state, thread_id, decisions).await?;
     }
-    append(state, thread_id, &Message::User { text: text.clone() }).await?;
-    let title: String = text.lines().next().unwrap_or("").chars().take(60).collect();
+    let dir = state
+        .paths
+        .thread_attachments_dir(&prepared.project.id, thread_id);
+    let images = images::store(&dir, images).await?;
+    let has_images = !images.is_empty();
+    append(
+        state,
+        thread_id,
+        &Message::User {
+            text: text.clone(),
+            images,
+        },
+    )
+    .await?;
+    let mut title: String = text.lines().next().unwrap_or("").chars().take(60).collect();
+    if title.is_empty() && has_images {
+        "Image".clone_into(&mut title);
+    }
     sqlx::query("UPDATE ai_threads SET title = ? WHERE id = ? AND title = 'New chat'")
         .bind(&title)
         .bind(thread_id)
@@ -446,13 +478,13 @@ async fn record_decisions(
             resolve_pending(pending_tools, &pending, &decisions).map_err(ApiError::internal)?
         }
         // Edits written as SEARCH/REPLACE blocks: tell the model in a user message.
-        None => Message::User {
-            text: pending
+        None => Message::user(
+            pending
                 .values()
                 .map(|patch| decisions[&patch.id].describe(patch))
                 .collect::<Vec<_>>()
                 .join("\n"),
-        },
+        ),
     };
 
     let now = now_ms();
@@ -592,13 +624,19 @@ async fn run_and_save(
     cancel: &CancellationToken,
 ) -> Result<(DoneStatus, Option<(String, bool)>), ApiError> {
     let tools = tool_context(state, project).await;
-    let history = trim_history(
+    let mut history = trim_history(
         messages(state, thread_id)
             .await?
             .into_iter()
             .map(|m| m.message)
             .collect(),
     );
+    images::load_recent(
+        &mut history,
+        &state.paths.thread_attachments_dir(&project.id, thread_id),
+        images::MAX_IMAGES_PER_TURN,
+    )
+    .await;
     let mut mode = match settings::supports_tools(state, model_ref).await? {
         Some(false) => EditMode::SearchReplace,
         _ => EditMode::Tools,
@@ -847,7 +885,7 @@ pub async fn inline(
     };
     let request = LlmRequest {
         system,
-        messages: vec![Message::User { text: request.text }],
+        messages: vec![Message::user(request.text)],
         tools: Vec::new(),
         max_tokens: Some(4_096),
         reasoning: model_ref.reasoning,

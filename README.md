@@ -14,8 +14,13 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
 - Compilation with latexmk (pdfLaTeX, XeLaTeX, LuaLaTeX, chosen automatically or per
   project) or Tectonic, on demand (`Ctrl+Enter`) or after every save. Errors and warnings
   appear in the editor and in a Problems list.
-- PDF preview that keeps your place when it reloads. `Ctrl`/`⌘`-click or double-click the
-  PDF to jump to the source; `Ctrl+Alt+→` in the editor highlights the line in the PDF.
+- PDF preview that keeps your place when it reloads. Click a line of the PDF to jump to its
+  source; `Ctrl+Alt+→` in the editor highlights the line in the PDF.
+- Capture and ask: drag over part of the PDF (a formula, a table, a figure) and it goes to
+  the assistant as an image, with its page and the source line it comes from, ready for
+  your question. `Esc` while dragging cancels; a message takes up to four images. The
+  conversation's model has to read images (DeepSeek v4.1 Flash through OpenCode Go does);
+  one that cannot shows the provider's error.
 - AI assistant (the robot button): it reads the project with tools (files, search, outline,
   compile log) and **proposes** edits, shown as word-level diffs. You accept or reject each
   change; accepted changes go into the editor, so `Ctrl+Z` undoes them. Nothing is written
@@ -65,6 +70,12 @@ without Open Prism:
 ```sh
 git --git-dir ~/.local/share/open-prism/history/<project id>.git log --stat
 ```
+
+### Images sent to the assistant
+
+They are kept in `<data dir>/attachments/<project id>/<conversation id>/`, also outside the
+project. Deleting the conversation or the project deletes them. They are sent to the
+conversation's AI provider, like the text of the messages.
 
 ## Goals
 
@@ -145,7 +156,7 @@ token on the `/login` page. Scripts can send it as `Authorization: Bearer <token
 - [x] **M2 AI**: provider settings, chat with project context, reviewed edits,
       "fix compile errors", fallback for models without tool calling
 - [ ] **M3 Writing help**: version history (done), suggestions as you type (done),
-      image/handwriting to LaTeX
+      capture and ask about the PDF (done), image/handwriting to LaTeX
 - [ ] **M4 Release**: password sign-in, Docker images, prebuilt binaries
 
 ## License

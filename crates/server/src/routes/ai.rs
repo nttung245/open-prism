@@ -1,8 +1,9 @@
 use std::convert::Infallible;
 
-use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Path, Query, State};
+use axum::http::{StatusCode, header};
 use axum::response::sse::{Event, Sse};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::Stream;
@@ -14,6 +15,7 @@ use crate::chat::{
 };
 use crate::completion::{self, CompletionRequest};
 use crate::error::ApiError;
+use crate::images;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -22,12 +24,19 @@ pub struct ThreadsQuery {
     project_id: String,
 }
 
+/// Largest message request: four 5 MB images in base64, and the text.
+const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/ai/threads", get(list).post(create))
         .route("/ai/threads/{id}", get(show).delete(remove))
-        .route("/ai/threads/{id}/messages", post(send))
+        .route(
+            "/ai/threads/{id}/messages",
+            post(send).layer(DefaultBodyLimit::max(MAX_MESSAGE_BYTES)),
+        )
         .route("/ai/threads/{id}/decisions", post(decide))
+        .route("/ai/threads/{id}/images/{image_id}", get(image))
         .route("/ai/inline", post(inline))
         .route("/ai/complete", post(complete))
 }
@@ -86,6 +95,29 @@ async fn inline(
     Json(request): Json<InlineRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     chat::inline(&state, request).await
+}
+
+/// An image sent in a conversation, by the id its message lists.
+async fn image(
+    State(state): State<AppState>,
+    Path((thread_id, image_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let thread = chat::thread(&state, &thread_id).await?;
+    let dir = state
+        .paths
+        .thread_attachments_dir(&thread.project_id, &thread_id);
+    let (path, kind) =
+        images::find(&dir, &image_id).ok_or_else(|| ApiError::not_found("no such image"))?;
+    let bytes = tokio::fs::read(&path).await.map_err(ApiError::internal)?;
+    Ok((
+        [
+            (header::CONTENT_TYPE, kind.media_type()),
+            // Not kept by the browser: deleting the conversation must leave no copy behind.
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response())
 }
 
 /// Server-sent `CompletionEvent`s: a suggestion to continue the text at the editor cursor.

@@ -400,12 +400,10 @@ pub async fn run_turn(
                             },
                         )
                         .await;
-                        result.messages.push(Message::User {
-                            text: format!(
-                                "Your SEARCH/REPLACE blocks could not be used: {problem} \
-                                 Write them again; nothing was changed."
-                            ),
-                        });
+                        result.messages.push(Message::user(format!(
+                            "Your SEARCH/REPLACE blocks could not be used: {problem} \
+                             Write them again; nothing was changed."
+                        )));
                     }
                 }
             }
@@ -499,7 +497,7 @@ pub async fn run_turn(
 /// Small models forget instructions given only in the system prompt: repeat the edit format
 /// in the last user message (only in the request, not in the stored conversation).
 fn remind_format(messages: &mut [Message]) {
-    if let Some(Message::User { text }) = messages.last_mut() {
+    if let Some(Message::User { text, .. }) = messages.last_mut() {
         text.push_str(
             "\n\n(If a file must change, reply with SEARCH/REPLACE blocks in the exact format \
              from the instructions: the file path, <<<<<<< SEARCH, the exact old lines, \
@@ -665,7 +663,7 @@ mod tests {
     }
 
     fn user(text: &str) -> Vec<Message> {
-        vec![Message::User { text: text.into() }]
+        vec![Message::user(text)]
     }
 
     #[tokio::test]
