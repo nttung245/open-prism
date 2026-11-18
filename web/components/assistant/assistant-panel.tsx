@@ -9,6 +9,7 @@ import {
   Info,
   LoaderCircle,
   MessageSquarePlus,
+  Paperclip,
   Search,
   Send,
   Settings,
@@ -19,8 +20,12 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import {
+  type ClipboardEvent,
+  type Dispatch,
+  type DragEvent,
   type KeyboardEvent,
   type Ref,
+  type SetStateAction,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -94,6 +99,9 @@ export function AssistantPanel({
   onOpenFile,
   images,
   onImagesChange,
+  onFilesAdd,
+  preparingImages,
+  imageProblem,
   handle,
 }: {
   projectId: string;
@@ -103,9 +111,12 @@ export function AssistantPanel({
   compiling: boolean;
   onCompile: () => void;
   onOpenFile: (path: string) => void;
-  /** Images waiting to be sent with the next message (captured from the PDF). */
+  /** Images waiting to be sent with the next message. */
   images: DraftImage[];
-  onImagesChange: (images: DraftImage[]) => void;
+  onImagesChange: Dispatch<SetStateAction<DraftImage[]>>;
+  onFilesAdd: (files: File[], pasted?: boolean) => Promise<void>;
+  preparingImages: number;
+  imageProblem: string | null;
   handle?: Ref<AssistantHandle>;
 }) {
   const queryClient = useQueryClient();
@@ -197,6 +208,10 @@ export function AssistantPanel({
   const [live, setLive] = useState<LiveItem[]>([]);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const dragDepth = useRef(0);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const imageProblemElement = useRef<HTMLParagraphElement>(null);
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const [choices, setChoices] = useState<Record<string, boolean[]>>({});
@@ -216,6 +231,11 @@ export function AssistantPanel({
   useEffect(() => {
     bottom.current?.scrollIntoView({ block: "end" });
   }, [live, thread.data]);
+
+  useEffect(() => {
+    if (imageProblem)
+      imageProblemElement.current?.scrollIntoView({ block: "nearest" });
+  }, [imageProblem]);
 
   const onEvent = useCallback((event: ChatEvent) => {
     setLive((items) => {
@@ -348,7 +368,8 @@ export function AssistantPanel({
   /** Sends what is in the message box: the text and the images waiting there. */
   const submit = useCallback(async () => {
     const trimmed = input.trim();
-    if ((!trimmed && images.length === 0) || busy) return;
+    if ((!trimmed && images.length === 0) || busy || preparingImages > 0)
+      return;
     if (images.length === 0) {
       send(trimmed);
       return;
@@ -363,7 +384,10 @@ export function AssistantPanel({
       return;
     }
     setInput("");
-    onImagesChange([]);
+    const sentKeys = new Set(sending.map((image) => image.key));
+    onImagesChange((current) =>
+      current.filter((image) => !sentKeys.has(image.key)),
+    );
     await run(
       (id) => `/api/ai/threads/${id}/messages`,
       { text: trimmed, images: uploads },
@@ -377,13 +401,24 @@ export function AssistantPanel({
     );
     // The stored message shows the server's copies from now on.
     for (const image of sending) URL.revokeObjectURL(image.url);
-  }, [input, images, busy, send, onImagesChange, run]);
+  }, [input, images, busy, preparingImages, send, onImagesChange, run]);
 
   const removeImage = (key: string) => {
     const image = images.find((i) => i.key === key);
     if (image) URL.revokeObjectURL(image.url);
-    onImagesChange(images.filter((i) => i.key !== key));
+    onImagesChange((current) => current.filter((i) => i.key !== key));
   };
+
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (event.clipboardData.getData("text/plain")) return;
+    const files = Array.from(event.clipboardData.files);
+    if (files.length === 0) return;
+    event.preventDefault();
+    void onFilesAdd(files, true);
+  };
+
+  const containsFiles = (event: DragEvent<HTMLElement>) =>
+    Array.from(event.dataTransfer.types).includes("Files");
 
   // A new capture: ready to type the question. Starts at 0 so that images captured while
   // the panel was closed (it opens with them) count as new.
@@ -483,7 +518,39 @@ export function AssistantPanel({
     0;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-panel">
+    <section
+      className="relative flex h-full min-h-0 flex-col bg-panel"
+      aria-label="Assistant"
+      onDragEnter={(event) => {
+        if (!containsFiles(event)) return;
+        event.preventDefault();
+        dragDepth.current += 1;
+        setDraggingFiles(true);
+      }}
+      onDragOver={(event) => {
+        if (!containsFiles(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+      }}
+      onDragLeave={(event) => {
+        if (!containsFiles(event)) return;
+        event.preventDefault();
+        dragDepth.current = Math.max(0, dragDepth.current - 1);
+        if (dragDepth.current === 0) setDraggingFiles(false);
+      }}
+      onDrop={(event) => {
+        if (!containsFiles(event)) return;
+        event.preventDefault();
+        dragDepth.current = 0;
+        setDraggingFiles(false);
+        void onFilesAdd(Array.from(event.dataTransfer.files));
+      }}
+    >
+      {draggingFiles && (
+        <div className="pointer-events-none absolute inset-2 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-accent bg-panel/95 text-sm text-accent">
+          Drop images to attach
+        </div>
+      )}
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border bg-background px-2">
         <Bot className="size-4 text-accent" />
         <select
@@ -579,6 +646,15 @@ export function AssistantPanel({
           </p>
         )}
         {problem && <p className="mt-2 text-xs text-danger">{problem}</p>}
+        {imageProblem && (
+          <p
+            ref={imageProblemElement}
+            role="alert"
+            className="mt-2 text-xs text-danger"
+          >
+            {imageProblem}
+          </p>
+        )}
 
         {pending.length > 0 && !busy && (
           <section className="mt-3 flex flex-col gap-2">
@@ -641,6 +717,7 @@ export function AssistantPanel({
           ref={textarea}
           value={input}
           onChange={(e) => setInput(e.target.value)}
+          onPaste={onPaste}
           onKeyDown={onKey}
           rows={3}
           placeholder={
@@ -703,6 +780,27 @@ export function AssistantPanel({
           </select>
         </div>
         <div className="mt-1 flex items-center justify-end gap-2">
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            multiple
+            className="hidden"
+            onChange={(event) => {
+              const files = Array.from(event.currentTarget.files ?? []);
+              event.currentTarget.value = "";
+              void onFilesAdd(files);
+            }}
+          />
+          <IconButton
+            label="Attach images"
+            onClick={() => fileInput.current?.click()}
+          >
+            <Paperclip className="size-4" />
+          </IconButton>
+          {preparingImages > 0 && (
+            <span className="text-xs text-muted">Preparing images…</span>
+          )}
           {thread.data && (
             <span
               className="shrink-0 text-[11px] text-muted tabular-nums"
@@ -720,14 +818,18 @@ export function AssistantPanel({
             <Button
               variant="primary"
               onClick={() => void submit()}
-              disabled={(!input.trim() && images.length === 0) || noModel}
+              disabled={
+                (!input.trim() && images.length === 0) ||
+                noModel ||
+                preparingImages > 0
+              }
             >
               <Send className="size-3.5" /> Send
             </Button>
           )}
         </div>
       </div>
-    </div>
+    </section>
   );
 }
 
