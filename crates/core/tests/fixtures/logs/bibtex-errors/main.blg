@@ -1,0 +1,56 @@
+This is BibTeX, Version 0.99e (TeX Live 2026)
+Capacity: max_strings=200000, hash_size=200000, hash_prime=170003
+The top-level auxiliary file: main.aux
+The style file: plain.bst
+Database file #1: refs.bib
+I was expecting a `,' or a `}'---line 17 of file refs.bib
+ :   
+ :   year   = {2020},
+(Error may have been on previous line)
+I'm skipping whatever remains of this entry
+Warning--I didn't find a database entry for "nosuchkey"
+Warning--empty journal in nojournal
+Warning--empty journal in broken
+Warning--empty year in broken
+You've used 3 entries,
+            2118 wiz_defined-function locations,
+            510 strings with 4144 characters,
+and the built_in function-call counts, 641 in all, are:
+= -- 55
+> -- 21
+< -- 0
++ -- 11
+- -- 6
+* -- 29
+:= -- 121
+add.period$ -- 8
+call.type$ -- 3
+change.case$ -- 11
+chr.to.int$ -- 0
+cite$ -- 6
+duplicate$ -- 32
+empty$ -- 57
+format.name$ -- 6
+if$ -- 125
+int.to.chr$ -- 0
+int.to.str$ -- 3
+missing$ -- 4
+newline$ -- 17
+num.names$ -- 6
+pop$ -- 22
+preamble$ -- 1
+purify$ -- 9
+quote$ -- 0
+skip$ -- 19
+stack$ -- 0
+substring$ -- 17
+swap$ -- 1
+text.length$ -- 0
+text.prefix$ -- 0
+top$ -- 0
+type$ -- 10
+warning$ -- 3
+while$ -- 6
+width$ -- 4
+write$ -- 28
+(There was 1 error message)

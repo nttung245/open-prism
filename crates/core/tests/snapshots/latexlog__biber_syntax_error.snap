@@ -1,0 +1,40 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex_and_biber(\"biber-syntax-error\")"
+---
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 7
+  message: "LaTeX Warning: Citation 'knuth1984' on page 1 undefined on input line 7."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 7
+  message: "LaTeX Warning: Citation 'nosuchkey' on page 1 undefined on input line 7."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 9
+  message: "LaTeX Warning: Empty bibliography on input line 9."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: ~
+  message: "LaTeX Warning: There were undefined references."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: ~
+  message: "Package biblatex Warning: Please (re)run Biber on the file: main and rerun LaTeX afterwards."
+  details: ""
+- severity: error
+  source: biber
+  file: bib/refs.bib
+  line: 10
+  message: "syntax error: found \"year\", expected end of entry (\"}\" or \")\") (skipping to next \"@\")"
+  details: ""

@@ -1,0 +1,52 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"package-messages\")"
+---
+- severity: warning
+  source: latex
+  file: localpkg.sty
+  line: 5
+  message: "Package localpkg Warning: This is a multi-line warning issued while loading the package (with parentheses in it) on input line 5."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 8
+  message: "Package hyperref Warning: Token not allowed in a PDF string (Unicode): removing `math shift' on input line 8."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 8
+  message: "Package hyperref Warning: Token not allowed in a PDF string (Unicode): removing `superscript' on input line 8."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 9
+  message: "LaTeX Font Warning: Font shape `OT1/cmr/bx/sc' undefined using `OT1/cmr/bx/n' instead on input line 9."
+  details: ""
+- severity: error
+  source: latex
+  file: main.tex
+  line: 11
+  message: "Package localpkg Error: Something went wrong in a local package."
+  details: "l.11 \\localfail\nThis is the help text of the local package error."
+- severity: error
+  source: latex
+  file: main.tex
+  line: 13
+  message: "Package xcolor Error: Undefined color `nocolor'."
+  details: "l.13 {\\color{nocolor}\n                      Undefined colour.}"
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 19
+  message: "pdfTeX warning (ext4): destination with the same identifier (name{page.1}) has been already used, duplicate ignored"
+  details: "<to be read again>\n                   \\relax\nl.19 \\end{document}"
+- severity: warning
+  source: latex
+  file: main.tex
+  line: ~
+  message: "LaTeX Font Warning: Some font shapes were not available, defaults substituted."
+  details: ""

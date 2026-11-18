@@ -1,0 +1,16 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"missing-package\")"
+---
+- severity: error
+  source: latex
+  file: main.tex
+  line: 3
+  message: "LaTeX Error: File `doesnotexist.sty' not found."
+  details: ""
+- severity: error
+  source: latex
+  file: main.tex
+  line: 3
+  message: Emergency stop.
+  details: "<read *>\n*** (cannot \\read from terminal in nonstop modes)"

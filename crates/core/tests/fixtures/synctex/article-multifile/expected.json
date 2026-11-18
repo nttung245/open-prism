@@ -1,0 +1,1208 @@
+{
+ "case": "article-multifile",
+ "pages": 6,
+ "forward": [
+  {
+   "file": "/data/projects/fixture/main.tex",
+   "line": 18,
+   "results": [
+    {
+     "page": 1,
+     "x": 203.50946,
+     "y": 301.019806,
+     "h": 145.100922,
+     "v": 302.956512,
+     "width": 304.109467,
+     "height": 8.798183
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/main.tex",
+   "line": 27,
+   "results": [
+    {
+     "page": 5,
+     "x": 299.867432,
+     "y": 750.256775,
+     "h": 117.828133,
+     "v": 750.256775,
+     "width": 358.655029,
+     "height": 7.054934
+    },
+    {
+     "page": 5,
+     "x": 71.999985,
+     "y": 71.999985,
+     "h": 71.999985,
+     "v": 71.999985,
+     "width": 0.0,
+     "height": 0.0
+    },
+    {
+     "page": 5,
+     "x": 117.828133,
+     "y": 750.256775,
+     "h": 117.828133,
+     "v": 750.256775,
+     "width": 358.655029,
+     "height": 7.054934
+    },
+    {
+     "page": 5,
+     "x": 117.828133,
+     "y": 101.887909,
+     "h": 117.828133,
+     "v": 101.887909,
+     "width": 358.655029,
+     "height": 0.0
+    },
+    {
+     "page": 5,
+     "x": 0.0,
+     "y": 0.0,
+     "h": 71.999985,
+     "v": 71.999985,
+     "width": 0.0,
+     "height": 0.0
+    },
+    {
+     "page": 6,
+     "x": 476.483154,
+     "y": 137.753403,
+     "h": 117.828133,
+     "v": 139.874084,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/main.tex",
+   "line": 36,
+   "results": [
+    {
+     "page": 6,
+     "x": 293.604736,
+     "y": 318.413788,
+     "h": 117.828133,
+     "v": 320.534454,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 6,
+     "x": 148.265778,
+     "y": 331.962952,
+     "h": 117.828133,
+     "v": 334.083618,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/main.tex",
+   "line": 44,
+   "results": [
+    {
+     "page": 6,
+     "x": 158.656052,
+     "y": 413.258118,
+     "h": 117.828133,
+     "v": 415.378784,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 6,
+     "x": 359.742981,
+     "y": 399.708954,
+     "h": 117.828133,
+     "v": 401.82962,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/intro.tex",
+   "line": 2,
+   "results": [
+    {
+     "page": 1,
+     "x": 166.331879,
+     "y": 395.188141,
+     "h": 117.828133,
+     "v": 397.308807,
+     "width": 358.850586,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/intro.tex",
+   "line": 11,
+   "results": [
+    {
+     "page": 1,
+     "x": 258.969604,
+     "y": 490.032501,
+     "h": 117.828133,
+     "v": 492.153168,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/intro.tex",
+   "line": 20,
+   "results": [
+    {
+     "page": 1,
+     "x": 476.483154,
+     "y": 530.680115,
+     "h": 117.828133,
+     "v": 532.800781,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/intro.tex",
+   "line": 29,
+   "results": [
+    {
+     "page": 1,
+     "x": 127.769028,
+     "y": 706.819641,
+     "h": 117.828133,
+     "v": 708.940308,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 1,
+     "x": 351.219849,
+     "y": 693.270447,
+     "h": 117.828133,
+     "v": 695.391113,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/intro.tex",
+   "line": 38,
+   "results": [
+    {
+     "page": 2,
+     "x": 139.646713,
+     "y": 212.543091,
+     "h": 117.828133,
+     "v": 214.663773,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/intro.tex",
+   "line": 46,
+   "results": [
+    {
+     "page": 2,
+     "x": 141.935135,
+     "y": 307.387451,
+     "h": 117.828133,
+     "v": 309.508667,
+     "width": 358.655029,
+     "height": 9.696959
+    },
+    {
+     "page": 2,
+     "x": 429.818817,
+     "y": 293.838287,
+     "h": 117.828133,
+     "v": 295.958954,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/intro.tex",
+   "line": 55,
+   "results": [
+    {
+     "page": 2,
+     "x": 126.868736,
+     "y": 402.231842,
+     "h": 117.828133,
+     "v": 404.352509,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 2,
+     "x": 338.306,
+     "y": 388.682617,
+     "h": 117.828133,
+     "v": 390.803284,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/methods.tex",
+   "line": 7,
+   "results": [
+    {
+     "page": 2,
+     "x": 160.91951,
+     "y": 528.695435,
+     "h": 117.828133,
+     "v": 530.816101,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 2,
+     "x": 438.694336,
+     "y": 515.146179,
+     "h": 117.828133,
+     "v": 517.266846,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/methods.tex",
+   "line": 16,
+   "results": [
+    {
+     "page": 2,
+     "x": 125.958679,
+     "y": 614.078979,
+     "h": 117.828133,
+     "v": 616.199646,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/methods.tex",
+   "line": 25,
+   "results": [
+    {
+     "page": 3,
+     "x": 117.828133,
+     "y": 137.753403,
+     "h": 117.828133,
+     "v": 137.753403,
+     "width": 358.655029,
+     "height": 8.250372
+    },
+    {
+     "page": 3,
+     "x": 117.828133,
+     "y": 137.753403,
+     "h": 117.828133,
+     "v": 137.753403,
+     "width": 358.655029,
+     "height": 8.250372
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/methods.tex",
+   "line": 34,
+   "results": [
+    {
+     "page": 2,
+     "x": 117.828133,
+     "y": 750.256775,
+     "h": 117.828133,
+     "v": 750.256775,
+     "width": 358.655029,
+     "height": 7.054934
+    },
+    {
+     "page": 2,
+     "x": 71.999985,
+     "y": 71.999985,
+     "h": 71.999985,
+     "v": 71.999985,
+     "width": 0.0,
+     "height": 0.0
+    },
+    {
+     "page": 2,
+     "x": 0.0,
+     "y": 0.0,
+     "h": 71.999985,
+     "v": 71.999985,
+     "width": 0.0,
+     "height": 0.0
+    },
+    {
+     "page": 2,
+     "x": 117.828133,
+     "y": 750.256775,
+     "h": 117.828133,
+     "v": 750.256775,
+     "width": 358.655029,
+     "height": 7.054934
+    },
+    {
+     "page": 2,
+     "x": 117.828133,
+     "y": 101.887909,
+     "h": 117.828133,
+     "v": 101.887909,
+     "width": 358.655029,
+     "height": 0.0
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/methods.tex",
+   "line": 42,
+   "results": [
+    {
+     "page": 3,
+     "x": 150.072357,
+     "y": 399.358337,
+     "h": 117.828133,
+     "v": 401.479004,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 3,
+     "x": 359.841003,
+     "y": 385.809113,
+     "h": 117.828133,
+     "v": 387.929779,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/methods.tex",
+   "line": 51,
+   "results": [
+    {
+     "page": 3,
+     "x": 157.302567,
+     "y": 494.202698,
+     "h": 117.828133,
+     "v": 496.323364,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 3,
+     "x": 408.435303,
+     "y": 480.653534,
+     "h": 117.828133,
+     "v": 482.7742,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/methods.tex",
+   "line": 60,
+   "results": [
+    {
+     "page": 3,
+     "x": 138.017014,
+     "y": 611.75061,
+     "h": 117.828133,
+     "v": 613.871277,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 3,
+     "x": 461.225372,
+     "y": 598.201416,
+     "h": 117.828133,
+     "v": 600.322083,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/methods.tex",
+   "line": 69,
+   "results": [
+    {
+     "page": 4,
+     "x": 166.331879,
+     "y": 137.753403,
+     "h": 117.828133,
+     "v": 139.874084,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 4,
+   "results": [
+    {
+     "page": 4,
+     "x": 156.764374,
+     "y": 277.766174,
+     "h": 117.828133,
+     "v": 279.886841,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 4,
+     "x": 442.134949,
+     "y": 264.21701,
+     "h": 117.828133,
+     "v": 266.337677,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 13,
+   "results": [
+    {
+     "page": 4,
+     "x": 291.261505,
+     "y": 345.894043,
+     "h": 199.256912,
+     "v": 349.958832,
+     "width": 195.79747,
+     "height": 13.549181
+    },
+    {
+     "page": 4,
+     "x": 249.173523,
+     "y": 345.894043,
+     "h": 199.256912,
+     "v": 349.958832,
+     "width": 195.79747,
+     "height": 13.549181
+    },
+    {
+     "page": 4,
+     "x": 347.870392,
+     "y": 345.894043,
+     "h": 199.256912,
+     "v": 349.958832,
+     "width": 195.79747,
+     "height": 13.549181
+    },
+    {
+     "page": 4,
+     "x": 199.256912,
+     "y": 345.894043,
+     "h": 199.256912,
+     "v": 349.958832,
+     "width": 195.79747,
+     "height": 13.549181
+    },
+    {
+     "page": 4,
+     "x": 205.234497,
+     "y": 345.894043,
+     "h": 199.256912,
+     "v": 349.958832,
+     "width": 49.916603,
+     "height": 13.549181
+    },
+    {
+     "page": 4,
+     "x": 304.663361,
+     "y": 341.935211,
+     "h": 291.261505,
+     "v": 349.958832,
+     "width": 50.631313,
+     "height": 13.549181
+    },
+    {
+     "page": 4,
+     "x": 357.824921,
+     "y": 341.935211,
+     "h": 341.892822,
+     "v": 349.958832,
+     "width": 53.161591,
+     "height": 13.549181
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 21,
+   "results": [
+    {
+     "page": 4,
+     "x": 219.39682,
+     "y": 417.297546,
+     "h": 117.828133,
+     "v": 417.297546,
+     "width": 358.655029,
+     "height": 7.513313
+    },
+    {
+     "page": 4,
+     "x": 117.828133,
+     "y": 368.384766,
+     "h": 117.828133,
+     "v": 398.825348,
+     "width": 358.655029,
+     "height": 66.335724
+    },
+    {
+     "page": 4,
+     "x": 117.828133,
+     "y": 417.297546,
+     "h": 117.828133,
+     "v": 417.297546,
+     "width": 358.655029,
+     "height": 7.513313
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 30,
+   "results": [
+    {
+     "page": 4,
+     "x": 149.827728,
+     "y": 508.427246,
+     "h": 117.828133,
+     "v": 510.547913,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 39,
+   "results": [
+    {
+     "page": 4,
+     "x": 476.483154,
+     "y": 589.722412,
+     "h": 117.828133,
+     "v": 591.843079,
+     "width": 358.655029,
+     "height": 9.633992
+    },
+    {
+     "page": 4,
+     "x": 476.483154,
+     "y": 562.624023,
+     "h": 117.828133,
+     "v": 564.74469,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 48,
+   "results": [
+    {
+     "page": 4,
+     "x": 146.756485,
+     "y": 616.820801,
+     "h": 117.828133,
+     "v": 618.941467,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 57,
+   "results": [
+    {
+     "page": 4,
+     "x": 169.71579,
+     "y": 711.665161,
+     "h": 117.828133,
+     "v": 713.785828,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 66,
+   "results": [
+    {
+     "page": 5,
+     "x": 147.057617,
+     "y": 426.006104,
+     "h": 117.828133,
+     "v": 426.006104,
+     "width": 358.655029,
+     "height": 7.513313
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 74,
+   "results": [
+    {
+     "page": 5,
+     "x": 117.828133,
+     "y": 522.961121,
+     "h": 117.828133,
+     "v": 522.961121,
+     "width": 358.655029,
+     "height": 8.250372
+    },
+    {
+     "page": 5,
+     "x": 117.828133,
+     "y": 522.961121,
+     "h": 117.828133,
+     "v": 522.961121,
+     "width": 358.655029,
+     "height": 8.250372
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 83,
+   "results": [
+    {
+     "page": 5,
+     "x": 320.379242,
+     "y": 638.398376,
+     "h": 117.828133,
+     "v": 640.519043,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  },
+  {
+   "file": "/data/projects/fixture/chapters/results.tex",
+   "line": 92,
+   "results": [
+    {
+     "page": 5,
+     "x": 144.705521,
+     "y": 719.693604,
+     "h": 117.828133,
+     "v": 721.81427,
+     "width": 358.655029,
+     "height": 9.633992
+    }
+   ]
+  }
+ ],
+ "inverse": [
+  {
+   "page": 1,
+   "x": 291.36,
+   "y": 542.76,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/intro.tex",
+     "line": 16,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 2,
+   "x": 129.21,
+   "y": 553.61,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 9,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "x": 472.08,
+   "y": 318.08,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 37,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "x": 464.31,
+   "y": 84.92,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 63,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 5,
+   "x": 304.85,
+   "y": 308.53,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 43,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 6,
+   "x": 352.06,
+   "y": 385.18,
+   "results": [
+    {
+     "file": "/data/projects/fixture/main.tex",
+     "line": 42,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 1,
+   "x": 171.32,
+   "y": 489.34,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/intro.tex",
+     "line": 10,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 2,
+   "x": 501.75,
+   "y": 507.45,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 7,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "x": 256.08,
+   "y": 633.04,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 62,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "x": 215.49,
+   "y": 303.32,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 6,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 5,
+   "x": 431.67,
+   "y": 305.37,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 43,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 6,
+   "x": 27.97,
+   "y": 543.81,
+   "results": [
+    {
+     "file": "/data/projects/fixture/main.tex",
+     "line": 49,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 1,
+   "x": 272.77,
+   "y": 524.27,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/intro.tex",
+     "line": 15,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 2,
+   "x": 232.15,
+   "y": 516.3,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 6,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "x": 471.6,
+   "y": 294.03,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 37,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "x": 138.53,
+   "y": 22.55,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 63,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 5,
+   "x": 337.31,
+   "y": 396.02,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 64,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 6,
+   "x": 195.59,
+   "y": 264.5,
+   "results": [
+    {
+     "file": "/data/projects/fixture/main.tex",
+     "line": 31,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 1,
+   "x": 349.72,
+   "y": 233.49,
+   "results": [
+    {
+     "file": "/data/projects/fixture/main.tex",
+     "line": 14,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 2,
+   "x": 129.63,
+   "y": 459.42,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 1,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "x": 316.01,
+   "y": 290.51,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 37,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "x": 339.21,
+   "y": 505.06,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 30,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 5,
+   "x": 465.91,
+   "y": 743.92,
+   "results": [
+    {
+     "file": "/data/projects/fixture/main.tex",
+     "line": 27,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 6,
+   "x": 437.64,
+   "y": 480.56,
+   "results": [
+    {
+     "file": "/data/projects/fixture/main.tex",
+     "line": 49,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 1,
+   "x": 407.13,
+   "y": 552.23,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/intro.tex",
+     "line": 18,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 2,
+   "x": 209.71,
+   "y": 500.55,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 5,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "x": 192.02,
+   "y": 426.38,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 44,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "x": 468.91,
+   "y": 545.53,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 34,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 5,
+   "x": 241.09,
+   "y": 310.06,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 43,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 6,
+   "x": 250.53,
+   "y": 278.83,
+   "results": [
+    {
+     "file": "/data/projects/fixture/main.tex",
+     "line": 32,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 1,
+   "x": 196.13,
+   "y": 418.34,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/intro.tex",
+     "line": 5,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 2,
+   "x": 270.4,
+   "y": 482.59,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 4,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "x": 277.96,
+   "y": 267.8,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 37,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "x": 128.66,
+   "y": 624.21,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 49,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 5,
+   "x": 356.64,
+   "y": 637.25,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 83,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 6,
+   "x": 336.12,
+   "y": 439.93,
+   "results": [
+    {
+     "file": "/data/projects/fixture/main.tex",
+     "line": 47,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 1,
+   "x": 416.03,
+   "y": 445.32,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/intro.tex",
+     "line": 8,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 2,
+   "x": 275.41,
+   "y": 575.28,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 15,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 3,
+   "x": 354.72,
+   "y": 549.64,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/methods.tex",
+     "line": 56,
+     "column": -1
+    }
+   ]
+  },
+  {
+   "page": 4,
+   "x": 326.32,
+   "y": 794.53,
+   "results": [
+    {
+     "file": "/data/projects/fixture/chapters/results.tex",
+     "line": 63,
+     "column": -1
+    }
+   ]
+  }
+ ]
+}

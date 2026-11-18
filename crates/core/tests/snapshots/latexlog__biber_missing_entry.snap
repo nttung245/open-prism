@@ -1,0 +1,40 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex_and_biber(\"biber-missing-entry\")"
+---
+- severity: warning
+  source: latex
+  file: ~
+  line: ~
+  message: "Package biblatex Warning: The following entry could not be found in the database: nosuchkey Please verify the spelling and rerun LaTeX afterwards."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 7
+  message: "LaTeX Warning: Citation 'nosuchkey' on page 1 undefined on input line 7."
+  details: ""
+- severity: warning
+  source: latex
+  file: main.tex
+  line: 10
+  message: "Package biblatex Warning: Month out of range or not an integer at entry 'lamport1986' on input line 10."
+  details: ""
+- severity: warning
+  source: biber
+  file: refs.bib
+  line: ~
+  message: "Duplicate entry key: 'knuth1984' in file 'refs.bib', skipping ..."
+  details: ""
+- severity: warning
+  source: biber
+  file: ~
+  line: ~
+  message: "legacy month field 'Smarch' in entry 'lamport1986' is not an integer - this will probably not sort properly."
+  details: ""
+- severity: warning
+  source: biber
+  file: ~
+  line: ~
+  message: "I didn't find a database entry for 'nosuchkey' (section 0)"
+  details: ""

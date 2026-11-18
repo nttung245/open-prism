@@ -1,0 +1,34 @@
+---
+source: crates/core/tests/latexlog.rs
+expression: "latex(\"bad-boxes\")"
+---
+- severity: info
+  source: latex
+  file: main.tex
+  line: 9
+  message: "Underfull \\hbox (badness 10000) in paragraph at lines 9--11"
+  details: "\\OT1/cmr/m/n/10 Short"
+- severity: info
+  source: latex
+  file: main.tex
+  line: 12
+  message: "Overfull \\hbox (114.20589pt too wide) detected at line 12"
+  details: "\\OT1/cmr/m/n/10 This box is far too narrow for its content"
+- severity: info
+  source: latex
+  file: chapters/wide.tex
+  line: 2
+  message: "Overfull \\hbox (64.55627pt too wide) in paragraph at lines 2--15"
+  details: ""
+- severity: info
+  source: latex
+  file: chapters/wide.tex
+  line: 2
+  message: "Underfull \\hbox (badness 10000) in paragraph at lines 2--15"
+  details: ""
+- severity: info
+  source: latex
+  file: main.tex
+  line: ~
+  message: "Underfull \\vbox (badness 10000) has occurred while \\output is active"
+  details: ""

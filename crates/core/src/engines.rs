@@ -192,11 +192,7 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_bin(dir: &Path, name: &str, script: &str) {
-        use std::os::unix::fs::PermissionsExt;
-
-        let bin = dir.join(name);
-        std::fs::write(&bin, format!("#!/bin/sh\n{script}\n")).unwrap();
-        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_script(&dir.join(name), script);
     }
 
     fn options(dir: &Path, docker_image: Option<&str>) -> DetectOptions {
