@@ -13,7 +13,10 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
   reloads by itself; if you had unsaved edits too, you choose which version to keep.
 - Compilation with latexmk (pdfLaTeX, XeLaTeX, LuaLaTeX, chosen automatically or per
   project) or Tectonic, on demand (`Ctrl+Enter`) or after every save. Errors and warnings
-  appear in the editor and in a Problems list.
+  appear in the editor and in a Problems list. The automatic choice reads
+  `% !TEX program = …`. Otherwise it picks XeLaTeX when a `.tex` file of the project needs
+  Unicode fonts (`fontspec`, …) or has Vietnamese text without the T5 encoding
+  (`\usepackage[T5]{fontenc}` or `[vietnamese]{babel}`), and pdfLaTeX for the rest.
 - PDF preview that keeps your place when it reloads. Click a line of the PDF to jump to its
   source; `Ctrl+Alt+→` in the editor highlights the line in the PDF.
 - Capture and ask: drag over part of the PDF (a formula, a table, a figure) and it goes to

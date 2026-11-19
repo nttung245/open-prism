@@ -23,8 +23,8 @@ use crate::paths::RelPath;
 #[serde(rename_all = "lowercase")]
 #[ts(export)]
 pub enum ProjectEngine {
-    /// Read `% !TEX program = …`, otherwise XeLaTeX when the preamble needs Unicode fonts,
-    /// otherwise pdfLaTeX.
+    /// Read `% !TEX program = …`, otherwise XeLaTeX when the project needs Unicode fonts or
+    /// has Vietnamese text without the T5 encoding, otherwise pdfLaTeX.
     #[default]
     Auto,
     Pdflatex,
@@ -90,9 +90,20 @@ pub enum CompileStatus {
     Error,
 }
 
-/// Picks the engine for documents that do not say which one they need.
-pub fn detect_program(source: &str) -> Program {
-    for line in source.lines().take(100) {
+/// Packages that only work with a Unicode engine.
+const UNICODE_ENGINE_MARKERS: [&str; 5] = [
+    "fontspec",
+    "unicode-math",
+    "polyglossia",
+    "xeCJK",
+    "\\setmainfont",
+];
+
+/// Picks the engine for documents that do not say which one they need. `others` holds the
+/// other `.tex` files of the project (chapters, a shared preamble), read for the same signs
+/// as the main file except the magic comment.
+pub fn detect_program(main: &str, others: &[String]) -> Program {
+    for line in main.lines().take(100) {
         let line = line.trim_start();
         if !line.starts_with('%') {
             continue;
@@ -110,25 +121,76 @@ pub fn detect_program(source: &str) -> Program {
             }
         }
     }
-    let code: String = source
-        .lines()
-        .map(strip_comment)
-        .collect::<Vec<_>>()
-        .join("\n");
-    let needs_unicode_engine = [
-        "fontspec",
-        "unicode-math",
-        "polyglossia",
-        "xeCJK",
-        "\\setmainfont",
-    ]
-    .iter()
-    .any(|marker| code.contains(marker));
-    if needs_unicode_engine {
+    let code: Vec<String> = std::iter::once(main)
+        .chain(others.iter().map(String::as_str))
+        .map(without_comments)
+        .collect();
+    let needs_unicode_engine = code.iter().any(|code| {
+        UNICODE_ENGINE_MARKERS
+            .iter()
+            .any(|marker| code.contains(marker))
+    });
+    // pdfLaTeX drops Vietnamese letters (with an error for each) unless the T5 encoding is
+    // loaded; XeLaTeX's default font has them all.
+    let vietnamese_without_t5 = code.iter().any(|code| has_vietnamese_letters(code))
+        && !code.iter().any(|code| sets_up_vietnamese(code));
+    if needs_unicode_engine || vietnamese_without_t5 {
         Program::Xelatex
     } else {
         Program::Pdflatex
     }
+}
+
+fn without_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(strip_comment)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Letters only Vietnamese uses: ơ, ư, and the letters with two diacritics or a dot below
+/// (ạ, ả, ấ … ỹ, the Latin Extended Additional block from U+1EA0).
+fn has_vietnamese_letters(code: &str) -> bool {
+    code.chars()
+        .any(|c| matches!(c, 'Ơ' | 'ơ' | 'Ư' | 'ư' | '\u{1EA0}'..='\u{1EF9}'))
+}
+
+/// Whether the code sets up pdfLaTeX for Vietnamese: babel's `vietnamese` option (also as
+/// a class option), the `vietnam` or `vntex` package, or the T5 font encoding.
+fn sets_up_vietnamese(code: &str) -> bool {
+    code.lines().any(|line| {
+        let declares = ["\\usepackage", "\\RequirePackage", "\\documentclass"]
+            .iter()
+            .any(|command| line.contains(command));
+        declares
+            && (line.contains("vietnam")
+                || line.contains("vntex")
+                || (line.contains("fontenc") && line.contains("T5")))
+    })
+}
+
+/// Most `.tex` files besides the main one read by [`other_sources`], and their largest size.
+const MAX_OTHER_SOURCES: usize = 200;
+const MAX_OTHER_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The project's other `.tex` files, for [`detect_program`].
+fn other_sources(root: &Path, main: &RelPath) -> Vec<String> {
+    let Ok(entries) = crate::files::list_tree(root) else {
+        return Vec::new();
+    };
+    entries
+        .into_iter()
+        .filter(|entry| {
+            entry.kind == crate::files::EntryKind::File
+                && entry.size <= MAX_OTHER_SOURCE_BYTES
+                && entry.path != main.as_str()
+                && entry.path.to_ascii_lowercase().ends_with(".tex")
+        })
+        .take(MAX_OTHER_SOURCES)
+        .filter_map(|entry| std::fs::read(root.join(&entry.path)).ok())
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .collect()
 }
 
 /// The part of a line before an unescaped `%`.
@@ -228,7 +290,16 @@ pub async fn compile(
             ));
         }
     };
-    let (program, engine) = match choose_toolchain(job.engine, &source, engines) {
+    let others = if job.engine == ProjectEngine::Auto {
+        let root = job.project_root.clone();
+        let main = job.main_file.clone();
+        tokio::task::spawn_blocking(move || other_sources(&root, &main))
+            .await
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let (program, engine) = match choose_toolchain(job.engine, &source, &others, engines) {
         Ok(choice) => choice,
         Err(message) => return failure(message),
     };
@@ -315,10 +386,12 @@ async fn read_lossy(path: &Path) -> Option<String> {
 }
 
 /// Picks the program and the toolchain that runs it. Docker is preferred over a native
-/// installation because it isolates the document from the host.
+/// installation because it isolates the document from the host. `other_sources` are the
+/// project's other `.tex` files, read by [`detect_program`] for `Auto`.
 pub fn choose_toolchain<'a>(
     requested: ProjectEngine,
     main_source: &str,
+    other_sources: &[String],
     engines: &'a [EngineInfo],
 ) -> Result<(Program, &'a EngineInfo), String> {
     let latexmk = engines
@@ -338,7 +411,7 @@ pub fn choose_toolchain<'a>(
                 .map(|engine| (Program::Tectonic, engine))
                 .ok_or_else(|| "Tectonic is not installed on this machine".to_owned());
         }
-        ProjectEngine::Auto => detect_program(main_source),
+        ProjectEngine::Auto => detect_program(main_source, other_sources),
         ProjectEngine::Pdflatex => Program::Pdflatex,
         ProjectEngine::Xelatex => Program::Xelatex,
         ProjectEngine::Lualatex => Program::Lualatex,
@@ -665,44 +738,123 @@ mod tests {
         }
     }
 
+    fn detect(main: &str) -> Program {
+        detect_program(main, &[])
+    }
+
     #[test]
     fn detects_the_program_from_magic_comments_and_packages() {
+        assert_eq!(detect("\\documentclass{article}"), Program::Pdflatex);
         assert_eq!(
-            detect_program("\\documentclass{article}"),
-            Program::Pdflatex
-        );
-        assert_eq!(
-            detect_program("% !TEX program = lualatex\n\\documentclass{article}"),
+            detect("% !TEX program = lualatex\n\\documentclass{article}"),
             Program::Lualatex
         );
+        assert_eq!(detect("% !TeX TS-program = XeLaTeX\n"), Program::Xelatex);
+        assert_eq!(detect("\\usepackage{amsmath,fontspec}"), Program::Xelatex);
         assert_eq!(
-            detect_program("% !TeX TS-program = XeLaTeX\n"),
-            Program::Xelatex
-        );
-        assert_eq!(
-            detect_program("\\usepackage{amsmath,fontspec}"),
-            Program::Xelatex
-        );
-        assert_eq!(
-            detect_program("% \\usepackage{fontspec}\n\\documentclass{article}"),
+            detect("% \\usepackage{fontspec}\n\\documentclass{article}"),
             Program::Pdflatex
         );
-        assert_eq!(detect_program("50\\% fontspec-free"), Program::Xelatex);
+        assert_eq!(detect("50\\% fontspec-free"), Program::Xelatex);
+        // A shared preamble in another file counts too.
+        assert_eq!(
+            detect_program("\\input{preamble}", &["\\usepackage{fontspec}".to_owned()]),
+            Program::Xelatex
+        );
+    }
+
+    #[test]
+    fn vietnamese_text_without_t5_needs_xelatex() {
+        // The article template with a Vietnamese project name: pdfLaTeX drops ử, ạ, ộ, ệ.
+        let article = "\\documentclass{article}\n\\usepackage{amsmath}\n\\title{Thử chạy một lệnh}\n\\begin{document}\n\\maketitle\n\\end{document}\n";
+        assert_eq!(detect(article), Program::Xelatex);
+        assert_eq!(detect("Cơ sở dữ liệu"), Program::Xelatex);
+        assert_eq!(detect("Như vậy"), Program::Xelatex);
+
+        // pdfLaTeX set up for Vietnamese: keep it.
+        for setup in [
+            "\\usepackage[T5]{fontenc}",
+            "\\usepackage[T1,T5]{fontenc}",
+            "\\usepackage[vietnamese]{babel}",
+            "\\usepackage[english,vietnamese]{babel}",
+            "\\documentclass[12pt,vietnamese]{report}",
+            "\\usepackage[utf8]{vietnam}",
+            "\\usepackage{vntex}",
+        ] {
+            assert_eq!(
+                detect(&format!("{setup}\n{article}")),
+                Program::Pdflatex,
+                "{setup}"
+            );
+        }
+        // …also from a shared preamble file.
+        assert_eq!(
+            detect_program(article, &["\\usepackage[T5]{fontenc}".to_owned()]),
+            Program::Pdflatex
+        );
+
+        // Vietnamese only in a chapter.
+        let main =
+            "\\documentclass{report}\n\\begin{document}\n\\input{chapters/intro}\n\\end{document}";
+        assert_eq!(detect(main), Program::Pdflatex);
+        assert_eq!(
+            detect_program(main, &["\\chapter{Mở đầu}".to_owned()]),
+            Program::Xelatex
+        );
+
+        // Comments, other languages, and the word "vietnam" in the text change nothing.
+        assert_eq!(detect("% Ghi chú: sửa lại\nHello"), Program::Pdflatex);
+        assert_eq!(detect("Café, naïve, Đorđe, Ærøskøbing"), Program::Pdflatex);
+        assert_eq!(
+            detect("\\url{https://vietnamnet.vn}\nBài viết"),
+            Program::Xelatex
+        );
+        // A magic comment wins.
+        assert_eq!(
+            detect(&format!("% !TEX program = pdflatex\n{article}")),
+            Program::Pdflatex
+        );
+    }
+
+    #[test]
+    fn other_sources_are_the_other_tex_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("chapters")).unwrap();
+        std::fs::write(root.join("main.tex"), "main").unwrap();
+        std::fs::write(root.join("chapters/intro.tex"), "Mở đầu").unwrap();
+        std::fs::write(root.join("chapters/NOTES.TEX"), "notes").unwrap();
+        std::fs::write(root.join("refs.bib"), "@book{x}").unwrap();
+        std::fs::write(root.join("figure.png"), [0x89, 0x50]).unwrap();
+
+        let mut found = other_sources(root, &RelPath::parse("main.tex").unwrap());
+        found.sort();
+        assert_eq!(found, ["Mở đầu", "notes"]);
+        assert!(
+            other_sources(&root.join("missing"), &RelPath::parse("main.tex").unwrap()).is_empty()
+        );
     }
 
     #[test]
     fn prefers_docker_and_falls_back() {
         let engines = [native(EngineKind::Latexmk, "/usr/bin/latexmk"), docker()];
-        let (program, engine) = choose_toolchain(ProjectEngine::Auto, "", &engines).unwrap();
+        let (program, engine) = choose_toolchain(ProjectEngine::Auto, "", &[], &engines).unwrap();
         assert_eq!(program, Program::Pdflatex);
         assert!(matches!(engine.runtime, EngineRuntime::Docker { .. }));
+        let chapter = ["Mở đầu".to_owned()];
+        let (program, _) = choose_toolchain(ProjectEngine::Auto, "", &chapter, &engines).unwrap();
+        assert_eq!(program, Program::Xelatex);
+        // An engine chosen by hand is kept.
+        let (program, _) =
+            choose_toolchain(ProjectEngine::Pdflatex, "", &chapter, &engines).unwrap();
+        assert_eq!(program, Program::Pdflatex);
 
         let only_tectonic = [native(EngineKind::Tectonic, "/usr/bin/tectonic")];
-        let (program, _) = choose_toolchain(ProjectEngine::Auto, "", &only_tectonic).unwrap();
+        let (program, _) = choose_toolchain(ProjectEngine::Auto, "", &[], &only_tectonic).unwrap();
         assert_eq!(program, Program::Tectonic);
-        assert!(choose_toolchain(ProjectEngine::Xelatex, "", &only_tectonic).is_err());
-        assert!(choose_toolchain(ProjectEngine::Tectonic, "", &engines).is_err());
-        assert!(choose_toolchain(ProjectEngine::Auto, "", &[]).is_err());
+        assert!(choose_toolchain(ProjectEngine::Xelatex, "", &[], &only_tectonic).is_err());
+        assert!(choose_toolchain(ProjectEngine::Tectonic, "", &[], &engines).is_err());
+        assert!(choose_toolchain(ProjectEngine::Auto, "", &[], &[]).is_err());
     }
 
     fn job(root: &Path) -> CompileJob {
@@ -931,6 +1083,41 @@ mod tests {
         assert!(outcome.has_pdf);
         assert!(job.run_dir.join(SYNCTEX_FILE).is_file());
         assert!(outcome.log.unwrap().contains("This is pdfTeX"));
+    }
+
+    #[tokio::test]
+    #[ignore = "needs Docker and the texlive/texlive image"]
+    async fn compiles_vietnamese_in_docker() {
+        let engine = docker_engine().await;
+        let dir = tempfile::tempdir().unwrap();
+        // The article template with a Vietnamese project name, and a Vietnamese chapter.
+        let mut job = docker_job(
+            dir.path(),
+            "vi",
+            "\\documentclass{article}\n\\usepackage{amsmath}\n\\usepackage{hyperref}\n\
+             \\title{Thử chạy một lệnh}\n\\begin{document}\n\\maketitle\n\
+             \\input{chapter}\n\\end{document}\n",
+        );
+        // XeLaTeX builds its font cache on a first run.
+        job.timeout = Duration::from_secs(120);
+        std::fs::write(
+            job.project_root.join("chapter.tex"),
+            "\\section{Giới thiệu}\nĐặng Ửng: ơ ư ạ ả ấ ầ ẩ ẫ ậ ỹ.\n",
+        )
+        .unwrap();
+
+        let outcome = compile(&job, &[engine], &CancellationToken::new()).await;
+
+        assert_eq!(
+            outcome.status,
+            CompileStatus::Success,
+            "{}",
+            outcome.console
+        );
+        assert_eq!(outcome.program, Some(Program::Xelatex));
+        let log = outcome.log.unwrap();
+        assert!(log.contains("This is XeTeX"));
+        assert!(!log.contains("Missing character"), "{log}");
     }
 
     #[tokio::test]
