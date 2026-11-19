@@ -42,6 +42,13 @@ import { tags } from "@lezer/highlight";
 import { type Ref, useEffect, useImperativeHandle, useRef } from "react";
 import type { Diagnostic } from "@/lib/api/types/Diagnostic";
 import { type GhostHooks, ghostText } from "@/lib/editor/ghost-text-view";
+import { droppedImage, pastedImage } from "@/lib/editor/image-input";
+import {
+  insertAt,
+  insertMarks,
+  markAt,
+  unmark,
+} from "@/lib/editor/insert-marks";
 
 /** Commands the editor triggers in the workspace. */
 export type EditorActions = {
@@ -50,6 +57,11 @@ export type EditorActions = {
   syncToPdf: () => void;
   /** Ghost text suggestions: how to ask for them and when. */
   suggest: GhostHooks;
+  /**
+   * An image pasted or dropped at `pos`, to turn into LaTeX. Returns false when the
+   * workspace does not take it (not a LaTeX file); the editor then does what it always does.
+   */
+  imageInput: (file: File, pos: number) => boolean;
 };
 
 export type CodeEditorHandle = {
@@ -70,6 +82,15 @@ export type CodeEditorHandle = {
     text: string,
   ) => boolean;
   focus: () => void;
+  /** Remembers a position (the cursor by default) to insert text at later; returns its id. */
+  mark: (pos?: number) => string | null;
+  /**
+   * Inserts `text` at a remembered position (at the cursor if the text around it was
+   * deleted) as one undoable change.
+   */
+  insertAtMark: (id: string, text: string) => void;
+  /** Forgets a remembered position. */
+  clearMark: (id: string) => void;
 };
 
 const highlightStyle = HighlightStyle.define([
@@ -146,6 +167,27 @@ export function createEditorState(
       EditorView.lineWrapping,
       theme,
       ghostText(() => actions.current.suggest),
+      insertMarks,
+      EditorView.domEventHandlers({
+        paste(event, view) {
+          const file = pastedImage(event.clipboardData);
+          if (!file) return false;
+          if (!actions.current.imageInput(file, view.state.selection.main.head))
+            return false;
+          event.preventDefault();
+          return true;
+        },
+        drop(event, view) {
+          const file = droppedImage(event.dataTransfer);
+          if (!file) return false;
+          const pos =
+            view.posAtCoords({ x: event.clientX, y: event.clientY }) ??
+            view.state.selection.main.head;
+          if (!actions.current.imageInput(file, pos)) return false;
+          event.preventDefault();
+          return true;
+        },
+      }),
       keymap.of([
         {
           key: "Mod-s",
@@ -332,6 +374,26 @@ export function CodeEditor({
       },
       focus() {
         view.current?.focus();
+      },
+      mark(pos) {
+        const editor = view.current;
+        if (!editor) return null;
+        const id = crypto.randomUUID();
+        const at = Math.min(
+          Math.max(pos ?? editor.state.selection.main.head, 0),
+          editor.state.doc.length,
+        );
+        editor.dispatch({ effects: markAt(id, at) });
+        return id;
+      },
+      insertAtMark(id, text) {
+        const editor = view.current;
+        if (!editor) return;
+        editor.dispatch(insertAt(editor.state, id, text));
+        editor.focus();
+      },
+      clearMark(id) {
+        view.current?.dispatch({ effects: unmark(id) });
       },
     }),
     [],

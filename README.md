@@ -32,6 +32,16 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
   before you decide. "Fix with AI" in the Problems list loops compile → fix → compile.
 - Quick actions on a selection (the AI menu): rewrite, shorten, fix grammar, translate,
   explain, or your own instruction.
+- Image to LaTeX: paste an image into a `.tex` file (when the clipboard holds no text), drop
+  an image file on the editor, or choose "Image to LaTeX…" in the AI menu. The fast model
+  transcribes the formula, table, or printed or handwritten text into LaTeX that fits the
+  spot: an `equation` or `align` environment (just the math when you are already inside
+  one), a `tabular`, or paragraphs in the language of the image. A panel shows the LaTeX as
+  it is written; the file does not change until you click Insert, which puts it where you
+  pasted or dropped, even if you kept typing meanwhile, as one change that `Ctrl+Z` undoes.
+  Packages the result needs that the main file does not load are named, never added, and
+  citations come out as `[?]` for you to fill in. The image is sent for that one request and
+  is not stored.
 - Suggestions as you type: pause in a `.tex` file and the fast model proposes how to go on
   (the rest of the sentence, the next `\item`, a missing `\end{…}`), shown in grey at the
   cursor as the model writes it. `Tab` accepts it, `Ctrl+→` (`Alt+→` on macOS) takes one
@@ -160,8 +170,8 @@ token on the `/login` page. Scripts can send it as `Authorization: Bearer <token
       latexmk/Tectonic compilation, error list, PDF preview, SyncTeX
 - [x] **M2 AI**: provider settings, chat with project context, reviewed edits,
       "fix compile errors", fallback for models without tool calling
-- [ ] **M3 Writing help**: version history (done), suggestions as you type (done),
-      capture and ask about the PDF (done), image/handwriting to LaTeX
+- [x] **M3 Writing help**: version history, suggestions as you type, capture and ask
+      about the PDF, images in the chat, image and handwriting to LaTeX
 - [ ] **M4 Release**: password sign-in, Docker images, prebuilt binaries
 
 ## License

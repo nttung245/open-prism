@@ -15,6 +15,7 @@ use crate::chat::{
 };
 use crate::completion::{self, CompletionRequest};
 use crate::error::ApiError;
+use crate::image_latex::{self, ImageLatexRequest};
 use crate::images;
 use crate::state::AppState;
 
@@ -26,6 +27,8 @@ pub struct ThreadsQuery {
 
 /// Largest message request: four 5 MB images in base64, and the text.
 const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+/// Largest image-to-LaTeX request: one 5 MB image in base64, and the text around it.
+const MAX_IMAGE_LATEX_BYTES: usize = 8 * 1024 * 1024;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -39,6 +42,10 @@ pub fn routes() -> Router<AppState> {
         .route("/ai/threads/{id}/images/{image_id}", get(image))
         .route("/ai/inline", post(inline))
         .route("/ai/complete", post(complete))
+        .route(
+            "/ai/image-to-latex",
+            post(image_to_latex).layer(DefaultBodyLimit::max(MAX_IMAGE_LATEX_BYTES)),
+        )
 }
 
 async fn list(
@@ -126,4 +133,12 @@ async fn complete(
     Json(request): Json<CompletionRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     completion::complete(&state, request).await
+}
+
+/// Server-sent `ImageLatexEvent`s: the LaTeX transcription of an image, to insert in the editor.
+async fn image_to_latex(
+    State(state): State<AppState>,
+    Json(request): Json<ImageLatexRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    image_latex::image_to_latex(&state, request).await
 }

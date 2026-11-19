@@ -1293,3 +1293,234 @@ async fn a_model_that_refuses_images_reports_it_and_keeps_the_message() {
     assert_eq!(user["text"], "What is this?");
     assert_eq!(user["images"].as_array().unwrap().len(), 1);
 }
+
+/// Image files anywhere in the data directory.
+fn stored_images(app: &App) -> Vec<std::path::PathBuf> {
+    fn walk(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, found);
+            } else if path.extension().is_some_and(|extension| {
+                ["png", "jpg", "jpeg", "webp"].contains(&extension.to_string_lossy().as_ref())
+            }) {
+                found.push(path);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(app._dir.path(), &mut found);
+    found
+}
+
+#[tokio::test]
+async fn images_become_latex_that_fits_the_document() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    script(
+        &server,
+        vec![sse(&[
+            text_chunk("\\usepackage{booktabs}\n```latex\n"),
+            text_chunk("\\begin{tabular}{ll}\n\\toprule\n"),
+            text_chunk("a & b \\\\ \\cite{smith2020}\n\\bottomrule\n\\end{tabular}\n```"),
+            finish("stop"),
+        ])],
+    )
+    .await;
+    let (project_id, _) = setup(&app, &server).await;
+
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/image-to-latex",
+            Some(json!({
+                "projectId": project_id, "path": "main.tex",
+                "image": {"data": PNG_BASE64},
+                "before": "Results:\n", "after": "\n\\end{document}",
+            })),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let events = body.as_array().unwrap();
+    assert_eq!(
+        events.last().unwrap(),
+        &json!({
+            "type": "done",
+            "latex": "\\begin{tabular}{ll}\n\\toprule\na & b \\\\ [?]\n\\bottomrule\n\\end{tabular}",
+            "packages": ["booktabs"],
+            "citationsRemoved": true,
+        })
+    );
+    let texts: Vec<&str> = events
+        .iter()
+        .filter(|e| e["type"] == "text")
+        .map(|e| e["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        texts,
+        [
+            "\\begin{tabular}{ll}\n\\toprule",
+            "\\begin{tabular}{ll}\n\\toprule\na & b \\\\ [?]\n\\bottomrule\n\\end{tabular}"
+        ],
+        "no fence, \\usepackage line or citation is ever shown"
+    );
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let (images, texts) = sent_user_content(&requests[0]);
+    assert_eq!(images, [format!("data:image/png;base64,{PNG_BASE64}")]);
+    let prompt = texts.join("\n");
+    assert!(prompt.contains("File: main.tex"), "{prompt}");
+    assert!(
+        prompt.contains("Packages loaded: amsmath, graphicx, hyperref"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("Results:\n<INSERT>\n\\end{document}"),
+        "{prompt}"
+    );
+    let sent: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert!(
+        sent.get("tools")
+            .is_none_or(|tools| tools.as_array().is_none_or(Vec::is_empty)),
+        "no tools are offered"
+    );
+    assert!(
+        sent["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .contains("Never write \\cite")
+    );
+    assert_eq!(
+        sent["reasoning_effort"], "low",
+        "the role's reasoning level"
+    );
+
+    let usage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage WHERE thread_id IS NULL")
+        .fetch_one(&app.state.db)
+        .await
+        .unwrap();
+    assert_eq!(usage, 1);
+    assert!(
+        stored_images(&app).is_empty(),
+        "the image is not kept: {:?}",
+        stored_images(&app)
+    );
+}
+
+#[tokio::test]
+async fn image_to_latex_checks_its_input_and_needs_a_model() {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD;
+
+    let app = App::new().await;
+    let (status, project) = app
+        .call(
+            Method::POST,
+            "/api/projects",
+            Some(json!({"name": "No model"})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let lonely = project["id"].as_str().unwrap().to_owned();
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/image-to-latex",
+            Some(json!({"projectId": lonely, "path": "main.tex", "image": {"data": PNG_BASE64}})),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Settings")
+    );
+
+    let server = MockServer::start().await;
+    let (project_id, _) = setup(&app, &server).await;
+    let png = json!({"data": PNG_BASE64});
+    let pdf = json!({"data": STANDARD.encode(b"%PDF-1.7\n")});
+    let mut large = STANDARD.decode(PNG_BASE64).unwrap();
+    large.resize(5 * 1024 * 1024 + 1024, 0);
+    let large = json!({"data": STANDARD.encode(&large)});
+    for (request, expected) in [
+        (
+            json!({"projectId": project_id, "path": "main.tex", "image": pdf}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "main.tex", "image": {"data": "not base64!"}}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "main.tex", "image": large}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "main.tex", "image": png, "before": "x".repeat(1_501)}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "main.tex", "image": png, "after": "y".repeat(501)}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": project_id, "path": "../x.tex", "image": png}),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            json!({"projectId": "01a1ecad-45ba-70a8-94cd-01767fa28a2f", "path": "main.tex", "image": png}),
+            StatusCode::NOT_FOUND,
+        ),
+    ] {
+        let (status, body) = app
+            .call(
+                Method::POST,
+                "/api/ai/image-to-latex",
+                Some(request.clone()),
+            )
+            .await;
+        let shown = request.to_string().chars().take(200).collect::<String>();
+        assert_eq!(status, expected, "{shown} → {body}");
+    }
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "nothing reached the provider"
+    );
+}
+
+#[tokio::test]
+async fn image_to_latex_reports_a_model_without_image_input_as_an_http_error() {
+    let app = App::new().await;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(
+            json!({"error": {"message": "this model does not support image input"}}),
+        ))
+        .mount(&server)
+        .await;
+    let (project_id, _) = setup(&app, &server).await;
+    let (status, body) = app
+        .call(
+            Method::POST,
+            "/api/ai/image-to-latex",
+            Some(
+                json!({"projectId": project_id, "path": "main.tex", "image": {"data": PNG_BASE64}}),
+            ),
+        )
+        .await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert_eq!(body["error"]["code"], "ai_provider");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("image input"),
+        "{body}"
+    );
+}

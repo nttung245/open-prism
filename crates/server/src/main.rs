@@ -7,6 +7,7 @@ mod db;
 mod error;
 mod events;
 mod history;
+mod image_latex;
 mod images;
 mod projects;
 mod routes;

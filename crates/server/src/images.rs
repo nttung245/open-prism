@@ -166,6 +166,17 @@ pub async fn store(dir: &Path, images: Vec<CheckedImage>) -> Result<Vec<ImageRef
     Ok(refs)
 }
 
+/// A checked image to send to a model once, without storing it.
+pub fn unstored(image: CheckedImage) -> ImageRef {
+    ImageRef {
+        id: Uuid::now_v7().to_string(),
+        media_type: image.kind.media_type().to_owned(),
+        page: None,
+        source: None,
+        data: Some(Arc::from(STANDARD.encode(image.bytes))),
+    }
+}
+
 /// The file of an image in a conversation's directory, if there is one. `id` must be a UUID,
 /// so it can never point outside the directory.
 pub fn find(dir: &Path, id: &str) -> Option<(PathBuf, ImageKind)> {
