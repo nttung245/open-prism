@@ -36,15 +36,9 @@ build: setup
     cp -r web/public web/.next/standalone/
     cp -r web/.next/static web/.next/standalone/.next/
 
-# Run the production build locally (both on 127.0.0.1)
+# Run the production build locally: the API starts the web app and prints a sign-in link (both on 127.0.0.1)
 start:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    trap 'kill 0' EXIT INT TERM
-    echo "Sign in at: http://127.0.0.1:{{web_port}}/login?token=$(./target/release/open-prism-api print-token)"
-    ./target/release/open-prism-api --port {{api_port}} &
-    (cd web/.next/standalone && OPENPRISM_API_URL={{api_url}} PORT={{web_port}} HOSTNAME=127.0.0.1 node server.js) &
-    wait
+    ./target/release/open-prism-api serve --web web/.next/standalone --port {{api_port}} --web-port {{web_port}}
 
 # Print the access token
 token:

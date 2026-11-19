@@ -146,11 +146,33 @@ just gen-types          # regenerate web/lib/api/types after changing API types
 just build && just start  # production build, run locally
 ```
 
+### Running the app with one command
+
+`just build` makes a release build of the API and a standalone build of the web app. One
+command then runs both (`just start` does the same):
+
+```sh
+./target/release/open-prism-api serve --web web/.next/standalone
+./target/release/open-prism-api serve --web web/.next/standalone --port 8799 --web-port 3799
+```
+
+Before starting, it checks for Node.js 22 or newer (`--node <path>` picks another one), for
+the build, and that both ports are free. It then starts the web app and prints a sign-in link
+once the web app is ready. Both listen on `127.0.0.1` only: the API on port 8787, the web app
+on 3737. The web app's output shows up in the log, marked `web`. If the web app crashes it is
+restarted, and after three crashes within a minute everything stops with an error. Ctrl+C
+stops both.
+
+If `open-prism-api` is killed outright (`kill -9`), the web app keeps running and the next
+start reports its port as busy; stop the leftover `node server.js` first. Tested on Linux;
+macOS and Windows are not tested yet.
+
 ### Signing in
 
 On first start the API creates a random access token in `<data dir>/access-token`
-(mode 0600). Open the sign-in link printed by `just dev`, or run `just token` and paste the
-token on the `/login` page. Scripts can send it as `Authorization: Bearer <token>`.
+(mode 0600). Open the sign-in link printed by `just dev` or `serve --web`, or run `just token`
+and paste the token on the `/login` page. Scripts can send it as
+`Authorization: Bearer <token>`.
 
 ### Configuration
 
@@ -160,7 +182,9 @@ token on the `/login` page. Scripts can send it as `Authorization: Bearer <token
 | `OPENPRISM_PORT` | API | `8787` |
 | `OPENPRISM_ACCESS_TOKEN` | API | read from / created in `<data dir>/access-token` |
 | `OPENPRISM_TEX_IMAGE` | API, `just tex-pull` | `texlive/texlive:latest` (`none` disables Docker) |
-| `OPENPRISM_API_URL` | web | `http://127.0.0.1:8787` |
+| `OPENPRISM_API_URL` | web (set by `serve --web`) | `http://127.0.0.1:8787` |
+| `OPENPRISM_WEB_PORT` | `serve --web` | `3737` |
+| `OPENPRISM_NODE` | `serve --web` | `node` from `PATH` |
 | `WEB_PORT` | `just dev` / `just start` | `3737` |
 
 ## Roadmap
@@ -172,7 +196,7 @@ token on the `/login` page. Scripts can send it as `Authorization: Bearer <token
       "fix compile errors", fallback for models without tool calling
 - [x] **M3 Writing help**: version history, suggestions as you type, capture and ask
       about the PDF, images in the chat, image and handwriting to LaTeX
-- [ ] **M4 Release**: password sign-in, Docker images, prebuilt binaries
+- [ ] **M4 Release**: one-command run, docs, prebuilt binaries, Docker image
 
 ## License
 
