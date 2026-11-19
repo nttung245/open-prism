@@ -70,28 +70,23 @@ impl AiError {
     pub fn from_genai(err: genai::Error) -> Self {
         use genai::Error as G;
         use genai::webc::Error as W;
+        if let Some((status, body)) = http_failure(&err) {
+            return Self::from_status(status, &body);
+        }
         match err {
             G::WebModelCall { webc_error, .. } | G::WebAdapterCall { webc_error, .. } => {
                 match webc_error {
-                    W::ResponseFailedStatus { status, body, .. } => {
-                        Self::from_status(status.as_u16(), &body)
-                    }
                     W::Reqwest(err) => Self::from_reqwest(err),
                     other => Self::Provider(summarise(&other.to_string())),
                 }
             }
-            G::HttpError { status, body, .. } => Self::from_status(status.as_u16(), &body),
-            // Streamed calls report HTTP failures inside a stream error.
-            G::WebStream { error, cause, .. } => match error.downcast_ref::<G>() {
-                Some(G::HttpError { status, body, .. }) => Self::from_status(status.as_u16(), body),
-                _ => match parse_http_cause(&cause) {
-                    Some((status, body)) => Self::from_status(status, body),
-                    None if mentions_missing_tool_support(&cause.to_ascii_lowercase()) => {
-                        Self::ToolsUnsupported(summarise(&cause))
-                    }
-                    None => Self::Unreachable(summarise(&cause)),
-                },
-            },
+            G::WebStream { cause, .. } => {
+                if mentions_missing_tool_support(&cause.to_ascii_lowercase()) {
+                    Self::ToolsUnsupported(summarise(&cause))
+                } else {
+                    Self::Unreachable(summarise(&cause))
+                }
+            }
             G::RequiresApiKey { .. } | G::NoAuthData { .. } | G::NoAuthResolver { .. } => {
                 Self::Unauthorized("no API key is configured".into())
             }
@@ -104,6 +99,29 @@ impl AiError {
                 }
             }
         }
+    }
+}
+
+/// The status and body of a provider's HTTP error answer, when `err` is one.
+pub(crate) fn http_failure(err: &genai::Error) -> Option<(u16, String)> {
+    use genai::Error as G;
+    use genai::webc::Error as W;
+    match err {
+        G::WebModelCall { webc_error, .. } | G::WebAdapterCall { webc_error, .. } => {
+            match webc_error {
+                W::ResponseFailedStatus { status, body, .. } => {
+                    Some((status.as_u16(), body.clone()))
+                }
+                _ => None,
+            }
+        }
+        G::HttpError { status, body, .. } => Some((status.as_u16(), body.clone())),
+        // Streamed calls report HTTP failures inside a stream error.
+        G::WebStream { error, cause, .. } => match error.downcast_ref::<G>() {
+            Some(G::HttpError { status, body, .. }) => Some((status.as_u16(), body.clone())),
+            _ => parse_http_cause(cause).map(|(status, body)| (status, body.to_owned())),
+        },
+        _ => None,
     }
 }
 

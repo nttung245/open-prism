@@ -50,6 +50,13 @@ test *mode:
     pnpm -C web typecheck
     pnpm -C web test
 
+# Call the real OpenAI and Gemini APIs with the keys in .env or the environment (a few cents per run)
+test-live:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -f .env ]; then set -a; source .env; set +a; fi
+    OPENPRISM_LIVE=1 cargo test -p openprism-ai --test live -- --ignored --nocapture --test-threads 1
+
 # Lint everything (what CI runs)
 lint:
     cargo fmt --all --check
