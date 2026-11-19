@@ -13,10 +13,10 @@ use genai::chat::{
 use genai::resolver::{AuthData, Endpoint, ServiceTargetResolver};
 use genai::{Client, ServiceTarget};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use ts_rs::TS;
 
-use crate::error::AiError;
+use crate::error::{AiError, http_failure};
 use crate::mock::MockModel;
 use crate::provider::{ProviderConfig, ProviderKind};
 
@@ -285,48 +285,224 @@ impl Model {
                 model,
                 kind,
             } => {
-                let mut chat = ChatRequest::new(to_genai_messages(&request.messages))
-                    .with_system(request.system.clone());
-                if !request.tools.is_empty() {
-                    chat = chat.with_tools(
-                        request
-                            .tools
-                            .iter()
-                            .map(|tool| {
-                                Tool::new(tool.name)
-                                    .with_description(tool.description)
-                                    .with_schema(tool.schema.clone())
-                            })
-                            .collect::<Vec<_>>(),
-                    );
+                let chat = chat_request(*kind, &request);
+                let requested = request.reasoning.map(ReasoningLevel::to_genai);
+                let options = chat_options(*kind, &request, requested.clone());
+                let first = start(client, model, chat.clone(), &options).await;
+                // A model that does not take the chosen reasoning level refuses the whole call;
+                // ask once more with a level it does take.
+                let Some(fallback) =
+                    first
+                        .error()
+                        .and_then(http_failure)
+                        .and_then(|(status, body)| {
+                            reasoning_fallback(requested.as_ref(), status, &body)
+                        })
+                else {
+                    return first.into_events();
+                };
+                tracing::warn!(
+                    provider = kind.as_str(),
+                    model = %model,
+                    requested = ?requested,
+                    fallback = ?fallback,
+                    "the model refused the reasoning level, sending the request again"
+                );
+                let options = chat_options(*kind, &request, fallback);
+                start(client, model, chat, &options).await.into_events()
+            }
+        }
+    }
+}
+
+fn chat_request(kind: ProviderKind, request: &LlmRequest) -> ChatRequest {
+    let chat =
+        ChatRequest::new(to_genai_messages(&request.messages)).with_system(request.system.clone());
+    if request.tools.is_empty() {
+        return chat;
+    }
+    chat.with_tools(
+        request
+            .tools
+            .iter()
+            .map(|tool| {
+                let built = Tool::new(tool.name)
+                    .with_description(tool.description)
+                    .with_schema(tool.schema.clone());
+                // The Responses API makes tools strict unless told otherwise, and strict schemas
+                // cannot have optional fields, which ours do.
+                if kind == ProviderKind::Openai {
+                    built.with_strict(false)
+                } else {
+                    built
                 }
-                let mut options = ChatOptions::default()
-                    .with_capture_usage(true)
-                    .with_capture_content(true)
-                    .with_capture_tool_calls(true)
-                    .with_normalize_reasoning_content(true)
-                    .with_stream_header_timeout(HEADER_TIMEOUT)
-                    .with_stream_read_timeout(READ_TIMEOUT);
-                if let Some(max) = request.max_tokens {
-                    options = options.with_max_tokens(max);
-                }
-                if let Some(level) = request.reasoning {
-                    options = options.with_reasoning_effort(level.to_genai());
-                }
-                let mut headers = vec![("user-agent".to_owned(), USER_AGENT.to_owned())];
-                if *kind == ProviderKind::OpencodeGo
-                    && let Some(session) = &request.session_id
-                {
-                    headers.push(("x-opencode-session".to_owned(), session.clone()));
-                }
-                options = options.with_extra_headers(headers);
-                let response = client
-                    .exec_chat_stream(model.as_str(), chat, Some(&options))
-                    .await
-                    .map_err(AiError::from_genai)?;
-                Ok(Box::pin(response.stream.flat_map(|event| {
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+/// Options for one call; `effort` is the reasoning level to send (`None`: the provider's default).
+fn chat_options(
+    kind: ProviderKind,
+    request: &LlmRequest,
+    effort: Option<ReasoningEffort>,
+) -> ChatOptions {
+    let mut options = ChatOptions::default()
+        .with_capture_usage(true)
+        .with_capture_content(true)
+        .with_capture_tool_calls(true)
+        .with_normalize_reasoning_content(true)
+        .with_stream_header_timeout(HEADER_TIMEOUT)
+        .with_stream_read_timeout(READ_TIMEOUT);
+    if let Some(max) = request.max_tokens {
+        options = options.with_max_tokens(max);
+    }
+    match (kind, effort) {
+        // `genai` keeps OpenAI's encrypted reasoning, which must be sent back with tool results,
+        // only when capturing reasoning content. That also asks for a reasoning summary, which
+        // OpenAI may refuse to unverified organisations; `extra_body` replaces the whole
+        // `reasoning` object, so the summary is dropped.
+        (ProviderKind::Openai, effort) => {
+            let reasoning = match effort.as_ref().and_then(openai_effort) {
+                Some(name) => json!({ "effort": name }),
+                None => json!({}),
+            };
+            options = options
+                .with_capture_reasoning_content(true)
+                .with_extra_body(json!({ "reasoning": reasoning }));
+        }
+        // `genai` sends nothing for "no reasoning", so Gemini would think at its default level.
+        // `extra_body` replaces whole top-level keys, so it carries all of `generationConfig`.
+        (ProviderKind::Gemini, Some(ReasoningEffort::Zero)) => {
+            let mut config = json!({ "thinkingConfig": { "thinkingBudget": 0 } });
+            if let Some(max) = request.max_tokens {
+                config["maxOutputTokens"] = json!(max);
+            }
+            options = options.with_extra_body(json!({ "generationConfig": config }));
+        }
+        (_, Some(effort)) => options = options.with_reasoning_effort(effort),
+        (_, None) => {}
+    }
+    let mut headers = vec![("user-agent".to_owned(), USER_AGENT.to_owned())];
+    if kind == ProviderKind::OpencodeGo
+        && let Some(session) = &request.session_id
+    {
+        headers.push(("x-opencode-session".to_owned(), session.clone()));
+    }
+    options.with_extra_headers(headers)
+}
+
+/// The name OpenAI uses for an effort level.
+fn openai_effort(effort: &ReasoningEffort) -> Option<&'static str> {
+    match effort {
+        ReasoningEffort::Zero => Some("none"),
+        other => other.as_keyword(),
+    }
+}
+
+/// Effort levels from least to most reasoning, for picking the nearest one a model takes.
+fn effort_rank(effort: &ReasoningEffort) -> Option<u8> {
+    Some(match effort {
+        ReasoningEffort::Zero => 0,
+        ReasoningEffort::Minimal => 1,
+        ReasoningEffort::Low => 2,
+        ReasoningEffort::Medium => 3,
+        ReasoningEffort::High => 4,
+        ReasoningEffort::XHigh => 5,
+        ReasoningEffort::Max => 6,
+        ReasoningEffort::Budget(_) => return None,
+    })
+}
+
+/// When a provider refused the reasoning level (`requested`) of a call, the level to ask again
+/// with: the nearest one the error lists as supported, else none at all. `None` when the
+/// failure is about something else, so the call is not repeated.
+fn reasoning_fallback(
+    requested: Option<&ReasoningEffort>,
+    status: u16,
+    body: &str,
+) -> Option<Option<ReasoningEffort>> {
+    let requested = requested?;
+    let lower = body.to_ascii_lowercase();
+    let about_reasoning = ["reasoning", "thinking", "budget"]
+        .iter()
+        .any(|word| lower.contains(word));
+    if status != 400 || !about_reasoning {
+        return None;
+    }
+    let nearest = effort_rank(requested).and_then(|wanted| {
+        supported_efforts(&lower)
+            .into_iter()
+            .filter_map(|effort| effort_rank(&effort).map(|rank| (rank, effort)))
+            .filter(|(rank, _)| *rank != wanted)
+            .min_by_key(|(rank, _)| (rank.abs_diff(wanted), *rank))
+            .map(|(_, effort)| effort)
+    });
+    Some(nearest)
+}
+
+/// `… Supported values are: 'none', 'low', and 'xhigh'.` (lowercased) → none, low, xhigh.
+fn supported_efforts(lower_body: &str) -> Vec<ReasoningEffort> {
+    let Some((_, rest)) = lower_body.split_once("supported values are:") else {
+        return Vec::new();
+    };
+    let list = rest.split(['.', '"']).next().unwrap_or_default();
+    list.split('\'')
+        .skip(1)
+        .step_by(2)
+        .filter_map(ReasoningEffort::from_keyword)
+        .collect()
+}
+
+type GenaiStream = Pin<Box<dyn Stream<Item = Result<ChatStreamEvent, genai::Error>> + Send>>;
+
+/// A started streamed call. A refused streamed call shows up as an error right after the
+/// stream's `Start` marker, so the stream is read up to its first other event.
+enum Start {
+    /// The stream, with the event read ahead put back in front.
+    Ready(GenaiStream),
+    /// The call could not be made at all.
+    CallFailed(genai::Error),
+    /// The stream's first event is an error.
+    Refused(genai::Error),
+}
+
+impl Start {
+    fn error(&self) -> Option<&genai::Error> {
+        match self {
+            Self::Ready(_) => None,
+            Self::CallFailed(err) | Self::Refused(err) => Some(err),
+        }
+    }
+
+    fn into_events(self) -> Result<EventStream, AiError> {
+        match self {
+            Self::Ready(stream) => {
+                Ok(Box::pin(stream.flat_map(|event| {
                     futures_util::stream::iter(convert_event(event))
                 })))
+            }
+            Self::CallFailed(err) => Err(AiError::from_genai(err)),
+            Self::Refused(err) => Ok(Box::pin(futures_util::stream::iter([Err(
+                AiError::from_genai(err),
+            )]))),
+        }
+    }
+}
+
+async fn start(client: &Client, model: &str, chat: ChatRequest, options: &ChatOptions) -> Start {
+    let response = match client.exec_chat_stream(model, chat, Some(options)).await {
+        Ok(response) => response,
+        Err(err) => return Start::CallFailed(err),
+    };
+    let mut stream = Box::pin(response.stream);
+    loop {
+        match stream.next().await {
+            // Carries nothing (`convert_event` drops it).
+            Some(Ok(ChatStreamEvent::Start)) => {}
+            Some(Err(err)) => return Start::Refused(err),
+            first => {
+                return Start::Ready(Box::pin(futures_util::stream::iter(first).chain(stream)));
             }
         }
     }
@@ -631,6 +807,166 @@ mod tests {
         let json = serde_json::to_string(&converted).unwrap();
         assert!(!json.contains("thinking"));
         assert!(json.contains("ERROR: bad"));
+    }
+
+    fn tool_request(reasoning: Option<ReasoningLevel>, max_tokens: Option<u32>) -> LlmRequest {
+        LlmRequest {
+            tools: vec![ToolSpec {
+                name: "read_file",
+                description: "Read a file",
+                schema: json!({"type": "object", "properties": {"path": {"type": "string"}}}),
+            }],
+            max_tokens,
+            reasoning,
+            ..LlmRequest::default()
+        }
+    }
+
+    fn options(kind: ProviderKind, request: &LlmRequest) -> ChatOptions {
+        chat_options(
+            kind,
+            request,
+            request.reasoning.map(ReasoningLevel::to_genai),
+        )
+    }
+
+    #[test]
+    fn openai_options_keep_encrypted_reasoning_without_a_summary() {
+        let off = options(
+            ProviderKind::Openai,
+            &tool_request(Some(ReasoningLevel::Off), None),
+        );
+        assert_eq!(off.capture_reasoning_content, Some(true));
+        assert!(off.reasoning_effort.is_none());
+        assert_eq!(
+            off.extra_body,
+            Some(json!({"reasoning": {"effort": "none"}}))
+        );
+
+        let max = options(
+            ProviderKind::Openai,
+            &tool_request(Some(ReasoningLevel::Max), None),
+        );
+        assert_eq!(
+            max.extra_body,
+            Some(json!({"reasoning": {"effort": "max"}}))
+        );
+
+        let unset = options(ProviderKind::Openai, &tool_request(None, None));
+        assert_eq!(unset.extra_body, Some(json!({"reasoning": {}})));
+
+        let chat = chat_request(ProviderKind::Openai, &tool_request(None, None));
+        assert_eq!(chat.tools.unwrap()[0].strict, Some(false));
+    }
+
+    #[test]
+    fn gemini_off_turns_thinking_off_and_keeps_the_token_limit() {
+        let off = options(
+            ProviderKind::Gemini,
+            &tool_request(Some(ReasoningLevel::Off), Some(256)),
+        );
+        assert!(off.reasoning_effort.is_none());
+        assert_eq!(
+            off.extra_body,
+            Some(json!({"generationConfig": {
+                "thinkingConfig": {"thinkingBudget": 0},
+                "maxOutputTokens": 256,
+            }}))
+        );
+
+        let low = options(
+            ProviderKind::Gemini,
+            &tool_request(Some(ReasoningLevel::Low), Some(256)),
+        );
+        assert!(matches!(low.reasoning_effort, Some(ReasoningEffort::Low)));
+        assert!(low.extra_body.is_none());
+    }
+
+    #[test]
+    fn other_providers_are_unchanged() {
+        for kind in [
+            ProviderKind::Openrouter,
+            ProviderKind::OpenaiCompatible,
+            ProviderKind::OpencodeGo,
+            ProviderKind::Anthropic,
+        ] {
+            let off = options(kind, &tool_request(Some(ReasoningLevel::Off), Some(64)));
+            assert!(matches!(off.reasoning_effort, Some(ReasoningEffort::Zero)));
+            assert!(off.extra_body.is_none());
+            assert_ne!(off.capture_reasoning_content, Some(true));
+            assert_eq!(off.max_tokens, Some(64));
+            let chat = chat_request(kind, &tool_request(None, None));
+            assert_eq!(chat.tools.unwrap()[0].strict, None);
+        }
+    }
+
+    fn openai_error(message: &str) -> String {
+        json!({"error": {
+            "message": message,
+            "type": "invalid_request_error",
+            "param": "reasoning.effort",
+            "code": "unsupported_value",
+        }})
+        .to_string()
+    }
+
+    #[test]
+    fn a_refused_level_falls_back_to_the_nearest_supported_one() {
+        // Answers from OpenAI on 2026-11-19.
+        let max_on_gpt_5_5 = openai_error(
+            "Unsupported value: 'max' is not supported with the 'gpt-5.5' model. Supported values are: 'none', 'low', 'medium', 'high', and 'xhigh'.",
+        );
+        assert!(matches!(
+            reasoning_fallback(Some(&ReasoningEffort::Max), 400, &max_on_gpt_5_5),
+            Some(Some(ReasoningEffort::XHigh))
+        ));
+        let none_on_gpt_5_mini = openai_error(
+            "Unsupported value: 'none' is not supported with the 'gpt-5-mini' model. Supported values are: 'minimal', 'low', 'medium', and 'high'.",
+        );
+        assert!(matches!(
+            reasoning_fallback(Some(&ReasoningEffort::Zero), 400, &none_on_gpt_5_mini),
+            Some(Some(ReasoningEffort::Minimal))
+        ));
+        assert!(matches!(
+            reasoning_fallback(Some(&ReasoningEffort::Max), 400, &none_on_gpt_5_mini),
+            Some(Some(ReasoningEffort::High))
+        ));
+    }
+
+    #[test]
+    fn a_refused_level_without_a_list_is_dropped() {
+        let gpt_4o = openai_error(
+            "Unsupported parameter: 'reasoning.effort' is not supported with this model.",
+        );
+        assert!(matches!(
+            reasoning_fallback(Some(&ReasoningEffort::Medium), 400, &gpt_4o),
+            Some(None)
+        ));
+        let gemini_pro = json!({"error": {
+            "code": 400,
+            "message": "Budget 0 is invalid. This model only works in thinking mode.",
+            "status": "INVALID_ARGUMENT",
+        }})
+        .to_string();
+        assert!(matches!(
+            reasoning_fallback(Some(&ReasoningEffort::Zero), 400, &gemini_pro),
+            Some(None)
+        ));
+    }
+
+    #[test]
+    fn other_failures_are_not_sent_again() {
+        let too_long = json!({"error": {
+            "message": "Your input exceeds the context window of this model.",
+            "param": "input",
+            "code": "context_length_exceeded",
+        }})
+        .to_string();
+        assert!(reasoning_fallback(Some(&ReasoningEffort::Medium), 400, &too_long).is_none());
+        let reasoning_body = openai_error("Unsupported value: 'max'.");
+        assert!(reasoning_fallback(Some(&ReasoningEffort::Max), 401, &reasoning_body).is_none());
+        // Nothing was asked for, so there is nothing to drop.
+        assert!(reasoning_fallback(None, 400, &reasoning_body).is_none());
     }
 
     #[test]

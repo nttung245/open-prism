@@ -69,7 +69,10 @@ impl ProviderKind {
     /// The `genai` adapter namespace used for this provider.
     pub(crate) fn genai_namespace(self) -> &'static str {
         match self {
-            Self::Openai | Self::Openrouter | Self::OpenaiCompatible | Self::Mock => "openai",
+            // OpenAI's reasoning models refuse function tools on Chat Completions unless reasoning
+            // is off; the Responses API takes tools at every level.
+            Self::Openai => "openai_resp",
+            Self::Openrouter | Self::OpenaiCompatible | Self::Mock => "openai",
             Self::Anthropic => "anthropic",
             Self::Gemini => "gemini",
             Self::Deepseek => "deepseek",
