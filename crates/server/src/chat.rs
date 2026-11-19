@@ -910,8 +910,9 @@ pub async fn inline(
             }
             Ok(mut stream) => loop {
                 let next = tokio::select! {
-                    next = futures_util::StreamExt::next(&mut stream) => next,
+                    biased;
                     () = cancel.cancelled() => break DoneStatus::Cancelled,
+                    next = futures_util::StreamExt::next(&mut stream) => next,
                 };
                 match next {
                     None => break DoneStatus::Complete,

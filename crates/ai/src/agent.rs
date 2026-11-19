@@ -282,9 +282,11 @@ pub async fn run_turn(
             reasoning: turn.reasoning,
             session_id: turn.session_id.clone(),
         };
+        // A stop wins over a model that answers at the same moment.
         let stream = tokio::select! {
-            stream = turn.model.stream(request) => stream,
+            biased;
             () = cancel.cancelled() => return result.finish(DoneStatus::Cancelled),
+            stream = turn.model.stream(request) => stream,
         };
         let mut stream = match stream {
             Ok(stream) => stream,
@@ -302,8 +304,9 @@ pub async fn run_turn(
         let mut cancelled = false;
         loop {
             let next = tokio::select! {
-                next = stream.next() => next,
+                biased;
                 () = cancel.cancelled() => { cancelled = true; break; }
+                next = stream.next() => next,
             };
             match next {
                 None => break,
