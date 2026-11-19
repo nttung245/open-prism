@@ -1,7 +1,13 @@
 "use client";
 
 import { Check, Copy, LoaderCircle, Sparkles, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import {
+  type Ref,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import { Button, IconButton } from "@/components/ui/button";
 import { errorMessage } from "@/lib/api/client";
 import { postEventStream } from "@/lib/api/sse";
@@ -9,6 +15,11 @@ import type { ChatEvent } from "@/lib/api/types/ChatEvent";
 import type { InlineAction } from "@/lib/api/types/InlineAction";
 
 export type Selection = { from: number; to: number; text: string };
+
+export type InlineActionsHandle = {
+  /** Closes the result panel, stopping a request in progress. */
+  close: () => void;
+};
 
 const ACTIONS: Array<{
   action: InlineAction;
@@ -32,22 +43,31 @@ type Run = {
   error: string | null;
 };
 
-/** The "AI" menu of the editor: quick actions on the selected text. */
+/** The "AI" menu of the editor: quick actions on the selected text, and an image to LaTeX. */
 export function InlineActions({
   projectId,
   getSelection,
   onReplace,
   onNotice,
+  onImageFile,
+  onRun,
+  ref,
 }: {
   projectId: string;
   getSelection: () => Selection | null;
   onReplace: (selection: Selection, text: string) => boolean;
   onNotice: (message: string) => void;
+  /** An image chosen with "Image to LaTeX…". */
+  onImageFile: (file: File) => void;
+  /** A quick action starts. */
+  onRun?: () => void;
+  ref?: Ref<InlineActionsHandle>;
 }) {
   const [open, setOpen] = useState(false);
   const [run, setRun] = useState<Run | null>(null);
   const abort = useRef<AbortController | null>(null);
   const menu = useRef<HTMLDivElement>(null);
+  const imagePicker = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -79,6 +99,7 @@ export function InlineActions({
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
+    onRun?.();
     setRun({
       label: choice.label.replace("…", ""),
       selection,
@@ -121,6 +142,7 @@ export function InlineActions({
     abort.current?.abort();
     setRun(null);
   };
+  useImperativeHandle(ref, () => ({ close }));
 
   return (
     <>
@@ -129,7 +151,7 @@ export function InlineActions({
           variant="ghost"
           className="h-7 px-2 text-xs"
           onClick={() => setOpen((v) => !v)}
-          title="AI actions on the selected text"
+          title="AI actions on the selected text, or an image to LaTeX"
         >
           <Sparkles className="size-3.5 text-accent" /> AI
         </Button>
@@ -146,8 +168,33 @@ export function InlineActions({
                 </button>
               </li>
             ))}
+            <li className="mt-1 border-t border-border pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  imagePicker.current?.click();
+                }}
+                className="w-full px-3 py-1.5 text-left hover:bg-panel"
+              >
+                Image to LaTeX…
+              </button>
+            </li>
           </ul>
         )}
+        <input
+          ref={imagePicker}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          className="hidden"
+          aria-hidden
+          tabIndex={-1}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) onImageFile(file);
+          }}
+        />
       </div>
       {run && (
         <div className="absolute inset-x-3 top-12 z-10 max-h-[60%] overflow-auto rounded-lg border border-border bg-background p-3 shadow-xl">

@@ -29,7 +29,14 @@ import {
   type AssistantHandle,
   AssistantPanel,
 } from "@/components/assistant/assistant-panel";
-import { InlineActions } from "@/components/assistant/inline-actions";
+import {
+  ImageToLatex,
+  useImageToLatex,
+} from "@/components/assistant/image-to-latex";
+import {
+  InlineActions,
+  type InlineActionsHandle,
+} from "@/components/assistant/inline-actions";
 import { SuggestionsToggle } from "@/components/editor/suggestions-toggle";
 import { HistoryPanel } from "@/components/history/history-panel";
 import { Button, IconButton } from "@/components/ui/button";
@@ -53,7 +60,8 @@ import type { Project } from "@/lib/api/types/Project";
 import type { ProjectEngine } from "@/lib/api/types/ProjectEngine";
 import type { ProjectEvent } from "@/lib/api/types/ProjectEvent";
 import type { TreeResponse } from "@/lib/api/types/TreeResponse";
-import { SuggestionCache } from "@/lib/editor/ghost-text";
+import { isLatexFile, SuggestionCache } from "@/lib/editor/ghost-text";
+import { textAroundPos } from "@/lib/editor/image-input";
 import {
   basename,
   buildTree,
@@ -176,6 +184,7 @@ export default function Workspace({
       }),
       cache: new SuggestionCache(),
     },
+    imageInput: () => false,
   });
   const onSaved = useRef<(path: string) => void>(() => {});
   const [store] = useState(
@@ -220,6 +229,58 @@ export default function Workspace({
     editor.current.goTo(goto.line, goto.column);
     pendingGoto.current = null;
   });
+
+  // --- image to LaTeX ------------------------------------------------------------------
+  const inlineActions = useRef<InlineActionsHandle>(null);
+  const pendingInsert = useRef<{
+    path: string;
+    markId: string;
+    latex: string;
+  } | null>(null);
+  const imageLatex = useImageToLatex({
+    projectId: id,
+    onInsert: (target, latex) => {
+      if (store.getSnapshot().active === target.path && editor.current) {
+        editor.current.insertAtMark(target.markId, latex);
+        return;
+      }
+      // Back to the file first; the LaTeX goes in once it is on screen.
+      pendingInsert.current = {
+        path: target.path,
+        markId: target.markId,
+        latex,
+      };
+      void store.open(target.path).then(() => {
+        if (!store.getState(target.path)) {
+          pendingInsert.current = null;
+          setNotice(`${target.path} cannot be opened; copy the LaTeX instead.`);
+        }
+      });
+    },
+    onDiscard: (target) => {
+      if (store.getSnapshot().active === target.path)
+        editor.current?.clearMark(target.markId);
+    },
+  });
+  useEffect(() => {
+    const pending = pendingInsert.current;
+    if (!pending || snapshot.active !== pending.path || !editor.current) return;
+    if (activeDoc?.loading) return;
+    editor.current.insertAtMark(pending.markId, pending.latex);
+    pendingInsert.current = null;
+  });
+  /** Starts turning an image into LaTeX at `pos` (the cursor by default) of the open file. */
+  const imageToLatex = (file: File, pos?: number): boolean => {
+    const path = store.getSnapshot().active;
+    const state = path ? store.getState(path) : null;
+    if (!path || !state || !isLatexFile(path) || !editor.current) return false;
+    const at = pos ?? state.selection.main.head;
+    const markId = editor.current.mark(at);
+    if (!markId) return false;
+    inlineActions.current?.close();
+    void imageLatex.start(file, { path, markId, ...textAroundPos(state, at) });
+    return true;
+  };
 
   // Open the main file first.
   const openedMain = useRef(false);
@@ -517,6 +578,7 @@ export default function Workspace({
       onLoading: setSuggestLoading,
       onError: setSuggestError,
     },
+    imageInput: imageToLatex,
   };
 
   // --- live updates ------------------------------------------------------------------
@@ -905,7 +967,22 @@ export default function Workspace({
                     ) ?? false
                   }
                   onNotice={setNotice}
+                  onImageFile={(file) => {
+                    if (!imageToLatex(file))
+                      setNotice(
+                        "Open a LaTeX file (.tex) to turn an image into LaTeX.",
+                      );
+                  }}
+                  onRun={imageLatex.close}
+                  ref={inlineActions}
                 />
+                {imageLatex.run && (
+                  <ImageToLatex
+                    run={imageLatex.run}
+                    onInsert={imageLatex.insert}
+                    onClose={imageLatex.close}
+                  />
+                )}
                 {activeDoc?.conflict && (
                   <ConflictBanner
                     kind={activeDoc.conflict.kind}

@@ -36,7 +36,7 @@ const CURSOR: &str = "<CURSOR>";
 
 /// Commands that cite; matched after a backslash, in any letter case. Variants such as
 /// `\citep`, `\citet`, `\cite*` or `\citeauthor` start with one of these.
-const CITE_COMMANDS: [&str; 6] = [
+pub(crate) const CITE_COMMANDS: [&str; 6] = [
     "cite",
     "nocite",
     "footcite",
@@ -203,13 +203,13 @@ impl Run {
     }
 }
 
-async fn record_usage(state: &AppState, model_ref: &ModelRef, usage: Usage) {
+pub(crate) async fn record_usage(state: &AppState, model_ref: &ModelRef, usage: Usage) {
     if let Err(err) = chat::record_usage(state, None, model_ref, usage).await {
         tracing::warn!(?err, "cannot record usage");
     }
 }
 
-fn provider_error(err: openprism_ai::error::AiError) -> ApiError {
+pub(crate) fn provider_error(err: openprism_ai::error::AiError) -> ApiError {
     ApiError::new(
         axum::http::StatusCode::BAD_GATEWAY,
         "ai_provider",
