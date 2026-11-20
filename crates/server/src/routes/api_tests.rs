@@ -410,6 +410,65 @@ async fn import_and_export_zip() {
     names.sort();
     assert_eq!(names, ["ch/", "ch/one.tex", "thesis.tex"]);
 
+    let seven_z = app
+        .call(
+            Method::GET,
+            &format!("/api/projects/{id}/export?format=7z"),
+            None,
+        )
+        .await;
+    assert_eq!(seven_z.status, StatusCode::OK);
+    assert_eq!(
+        seven_z.headers[header::CONTENT_TYPE],
+        "application/x-7z-compressed"
+    );
+    assert!(
+        seven_z.headers[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("My Thesis.7z")
+    );
+    let mut reader = sevenz_rust2::ArchiveReader::new(
+        std::io::Cursor::new(seven_z.body.to_vec()),
+        sevenz_rust2::Password::empty(),
+    )
+    .unwrap();
+    let mut entries = Vec::new();
+    reader
+        .for_each_entries(|entry, content| {
+            let mut text = String::new();
+            content.read_to_string(&mut text).unwrap();
+            entries.push((entry.name().to_owned(), text));
+            Ok(true)
+        })
+        .unwrap();
+    entries.sort();
+    assert_eq!(
+        entries,
+        [
+            ("ch".to_owned(), String::new()),
+            ("ch/one.tex".to_owned(), "Chapter one".to_owned()),
+            (
+                "thesis.tex".to_owned(),
+                "\\documentclass{book}\n\\input{ch/one}".to_owned()
+            ),
+        ]
+    );
+
+    let rar = app
+        .call(
+            Method::GET,
+            &format!("/api/projects/{id}/export?format=rar"),
+            None,
+        )
+        .await;
+    assert_eq!(rar.status, StatusCode::BAD_REQUEST);
+    let message = rar.json()["error"]["message"].as_str().unwrap().to_owned();
+    assert!(
+        message.contains("zip") && message.contains("7z"),
+        "{message}"
+    );
+
     let (content_type, body) = multipart(&[("file", Some("x.zip"), b"not a zip")]);
     let reply = app
         .send(
@@ -576,6 +635,133 @@ async fn compile_runs_in_the_background_and_serves_outputs() {
         format!("/api/projects/{id}/runs/0190f1a2-0000-7000-8000-000000000000/output.pdf");
     assert_eq!(
         app.call(Method::GET, &other_run, None).await.status,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// A PDF of `pages` pages, each saying its number.
+fn pdf_with_pages(pages: u32) -> Vec<u8> {
+    use lopdf::{Document, Object, Stream, dictionary};
+    let mut doc = Document::with_version("1.5");
+    let tree = doc.new_object_id();
+    let kids: Vec<Object> = (1..=pages)
+        .map(|n| {
+            let content = doc.add_object(Stream::new(
+                dictionary! {},
+                format!("BT 72 720 Td (page {n}) Tj ET").into_bytes(),
+            ));
+            Object::Reference(doc.add_object(dictionary! {
+                "Type" => "Page",
+                "Parent" => tree,
+                "MediaBox" => vec![0.into(), 0.into(), 612.into(), 792.into()],
+                "Contents" => content,
+            }))
+        })
+        .collect();
+    doc.objects.insert(
+        tree,
+        Object::Dictionary(dictionary! { "Type" => "Pages", "Kids" => kids, "Count" => pages }),
+    );
+    let catalog = doc.add_object(dictionary! { "Type" => "Catalog", "Pages" => tree });
+    doc.trailer.set("Root", catalog);
+    let mut out = Vec::new();
+    doc.save_to(&mut out).unwrap();
+    out
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn pages_of_a_run_can_be_downloaded() {
+    let bin = tempfile::tempdir().unwrap();
+    let app = TestApp::new(vec![fake_latexmk(bin.path())]).await;
+    let id = app.create_project("Paper").await;
+    let events = app
+        .router
+        .clone()
+        .oneshot(
+            TestApp::request(Method::GET, &format!("/api/projects/{id}/events"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let started = app
+        .call(Method::POST, &format!("/api/projects/{id}/compile"), None)
+        .await;
+    let run_id = started.json()["runId"].as_str().unwrap().to_owned();
+    wait_for_finish(events.into_body()).await;
+    let pdf_path = app.state.paths.run_dir(&id, &run_id).join("output.pdf");
+    let pages_uri = |spec: &str| format!("/api/projects/{id}/runs/{run_id}/pages?pages={spec}");
+
+    // The fake engine's PDF cannot be read.
+    let unreadable = app.call(Method::GET, &pages_uri("1"), None).await;
+    assert_eq!(unreadable.status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    std::fs::write(&pdf_path, pdf_with_pages(4)).unwrap();
+    let reply = app.call(Method::GET, &pages_uri("4,%202-3"), None).await;
+    assert_eq!(reply.status, StatusCode::OK, "{:?}", reply.body);
+    assert_eq!(reply.headers[header::CONTENT_TYPE], "application/pdf");
+    assert!(
+        reply.headers[header::CACHE_CONTROL]
+            .to_str()
+            .unwrap()
+            .contains("immutable")
+    );
+    let disposition = reply.headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+    assert!(
+        disposition.contains("Paper%20%28pages%202-4%29.pdf"),
+        "{disposition}"
+    );
+    let extracted = lopdf::Document::load_mem(&reply.body).unwrap();
+    assert_eq!(extracted.get_pages().len(), 3);
+
+    for (spec, status) in [
+        ("9", StatusCode::BAD_REQUEST),
+        ("3-x", StatusCode::BAD_REQUEST),
+        ("", StatusCode::BAD_REQUEST),
+    ] {
+        let reply = app.call(Method::GET, &pages_uri(spec), None).await;
+        assert_eq!(reply.status, status, "{spec}");
+        let message = reply.json()["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(message.contains("1–4"), "{spec}: {message}");
+    }
+    let no_parameter = format!("/api/projects/{id}/runs/{run_id}/pages");
+    assert_eq!(
+        app.call(Method::GET, &no_parameter, None).await.status,
+        StatusCode::BAD_REQUEST
+    );
+
+    // The static route does not hide the run's own files.
+    let whole = format!("/api/projects/{id}/runs/{run_id}/output.pdf");
+    let whole = app.call(Method::GET, &whole, None).await;
+    assert_eq!(whole.status, StatusCode::OK);
+    assert_eq!(whole.body, pdf_with_pages(4));
+
+    let other_run =
+        format!("/api/projects/{id}/runs/0190f1a2-0000-7000-8000-000000000000/pages?pages=1");
+    assert_eq!(
+        app.call(Method::GET, &other_run, None).await.status,
+        StatusCode::NOT_FOUND
+    );
+
+    // A sparse file: the size is checked before anything is read.
+    let file = std::fs::File::options()
+        .write(true)
+        .open(&pdf_path)
+        .unwrap();
+    file.set_len(openprism_core::pdf_pages::MAX_PDF_BYTES + 1)
+        .unwrap();
+    assert_eq!(
+        app.call(Method::GET, &pages_uri("1"), None).await.status,
+        StatusCode::PAYLOAD_TOO_LARGE
+    );
+
+    std::fs::remove_file(&pdf_path).unwrap();
+    assert_eq!(
+        app.call(Method::GET, &pages_uri("1"), None).await.status,
         StatusCode::NOT_FOUND
     );
 }

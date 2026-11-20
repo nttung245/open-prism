@@ -48,6 +48,8 @@ nix.workspace = true
 
 [dev-dependencies]
 http-body-util = "0.1"
+lopdf.workspace = true
+sevenz-rust2.workspace = true
 wiremock = "0.6"
 zip.workspace = true
 

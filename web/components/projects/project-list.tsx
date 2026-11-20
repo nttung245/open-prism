@@ -1,18 +1,12 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Download,
-  FilePlus2,
-  FileUp,
-  LoaderCircle,
-  Pencil,
-  Trash2,
-} from "lucide-react";
+import { FilePlus2, FileUp, LoaderCircle, Pencil, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type SubmitEvent, useRef, useState } from "react";
 import { Button, IconButton } from "@/components/ui/button";
+import { DownloadMenu } from "@/components/ui/download-menu";
 import { apiFetch, apiJson, errorMessage } from "@/lib/api/client";
 import type { ImportResponse } from "@/lib/api/types/ImportResponse";
 import type { Project } from "@/lib/api/types/Project";
@@ -175,14 +169,7 @@ export function ProjectList({ initial }: { initial: Project[] }) {
                 >
                   <Pencil className="size-4" />
                 </IconButton>
-                <a
-                  href={`/api/projects/${project.id}/export`}
-                  aria-label="Download ZIP"
-                  title="Download ZIP"
-                  className="inline-flex size-7 items-center justify-center rounded-md text-muted hover:bg-zinc-200/60 hover:text-foreground dark:hover:bg-zinc-800/60"
-                >
-                  <Download className="size-4" />
-                </a>
+                <DownloadMenu projectId={project.id} />
                 <IconButton
                   label="Delete"
                   className="hover:text-danger"

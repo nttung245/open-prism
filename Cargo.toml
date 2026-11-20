@@ -52,6 +52,8 @@ ts-rs = "12"
 uuid = { version = "1.29", features = ["v7"] }
 which = "8"
 zip = { version = "9.7", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64"] }
+sevenz-rust2 = { version = "0.25", default-features = false, features = ["compress"] }
+lopdf = { version = "0.47", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

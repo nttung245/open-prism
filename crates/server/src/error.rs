@@ -113,6 +113,8 @@ impl From<openprism_core::archive::ArchiveError> for ApiError {
         use openprism_core::archive::ArchiveError as E;
         match err {
             E::Io(err) => Self::internal(err),
+            // Writing an export failed: nothing the user sent was wrong.
+            E::SevenZ(message) => Self::internal(message),
             other => Self::new(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "invalid_archive",

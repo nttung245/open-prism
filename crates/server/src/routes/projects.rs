@@ -1,11 +1,11 @@
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Multipart, Path, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use openprism_core::archive::{ImportLimits, export_zip, import_zip};
-use serde::Serialize;
+use openprism_core::archive::{ImportLimits, export_7z, export_zip, import_zip};
+use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use ts_rs::TS;
 
@@ -164,15 +164,58 @@ async fn import(
     ))
 }
 
+#[derive(Debug, Deserialize)]
+struct ExportQuery {
+    format: Option<String>,
+}
+
+/// Archive formats of `GET /projects/{id}/export`.
+#[derive(Debug, Clone, Copy)]
+enum ExportFormat {
+    Zip,
+    SevenZ,
+}
+
+impl ExportFormat {
+    fn parse(format: Option<&str>) -> Result<Self, ApiError> {
+        match format.map(str::trim) {
+            None | Some("" | "zip") => Ok(Self::Zip),
+            Some("7z") => Ok(Self::SevenZ),
+            Some(other) => Err(ApiError::bad_request(format!(
+                "unsupported format `{other}`: use zip or 7z"
+            ))),
+        }
+    }
+
+    fn content_type(self) -> &'static str {
+        match self {
+            Self::Zip => "application/zip",
+            Self::SevenZ => "application/x-7z-compressed",
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Zip => "zip",
+            Self::SevenZ => "7z",
+        }
+    }
+}
+
 async fn export(
     State(state): State<AppState>,
     Path(id): Path<String>,
+    Query(query): Query<ExportQuery>,
 ) -> Result<Response, ApiError> {
+    let format = ExportFormat::parse(query.format.as_deref())?;
     let project = projects::get(&state, &id).await?;
     let root = state.paths.project_dir(&id);
     let temp = tempfile::tempfile_in(&state.paths.tmp).map_err(ApiError::internal)?;
     let file = tokio::task::spawn_blocking(move || -> Result<std::fs::File, ApiError> {
-        let mut file = export_zip(&root, temp)?;
+        let mut file = match format {
+            ExportFormat::Zip => export_zip(&root, temp)?,
+            ExportFormat::SevenZ => export_7z(&root, temp)?,
+        };
         std::io::Seek::rewind(&mut file).map_err(ApiError::internal)?;
         Ok(file)
     })
@@ -182,11 +225,11 @@ async fn export(
     let body = Body::from_stream(tokio_util::io::ReaderStream::new(file));
     Ok((
         [
-            (header::CONTENT_TYPE, "application/zip".to_owned()),
+            (header::CONTENT_TYPE, format.content_type().to_owned()),
             (header::CONTENT_LENGTH, length.to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                content_disposition(&format!("{}.zip", project.name)),
+                content_disposition(&format!("{}.{}", project.name, format.extension())),
             ),
         ],
         body,
@@ -195,7 +238,7 @@ async fn export(
 }
 
 /// `attachment` header with an ASCII fallback and the UTF-8 name (RFC 6266).
-fn content_disposition(file_name: &str) -> String {
+pub(crate) fn content_disposition(file_name: &str) -> String {
     let ascii: String = file_name
         .chars()
         .map(|c| {
