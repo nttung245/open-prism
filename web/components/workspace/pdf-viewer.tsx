@@ -26,6 +26,7 @@ import {
   type Point,
   type Rect,
 } from "@/lib/pdf/capture";
+import { PageDownload } from "./page-download";
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL(
   "pdfjs-dist/build/pdf.worker.min.mjs",
@@ -257,6 +258,13 @@ export function PdfViewer({
         >
           <Maximize2 className="size-4" />
         </IconButton>
+        {url && (
+          <PageDownload
+            pdfUrl={url}
+            currentPage={currentPage}
+            disabled={!doc}
+          />
+        )}
         {url && (
           <a
             href={url}

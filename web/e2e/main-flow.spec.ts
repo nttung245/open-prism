@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   type APIRequestContext,
@@ -204,6 +205,37 @@ test("import, edit, compile, and accept an edit from the assistant", async ({
     await compile(page, projectId, () =>
       page.getByRole("button", { name: "Compile", exact: true }).click(),
     );
+  });
+
+  await test.step("download the project as 7z", async () => {
+    await page.getByRole("button", { name: "Download project" }).click();
+    const downloading = page.waitForEvent("download");
+    await page.getByRole("menuitem", { name: "7z" }).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe("paper.7z");
+    const bytes = await readFile(await download.path());
+    expect([...bytes.subarray(0, 6)]).toEqual([
+      0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c,
+    ]);
+  });
+
+  await test.step("download the page being read", async () => {
+    const form = page.getByRole("form", { name: "Download pages" });
+    await page.getByRole("button", { name: "Download pages…" }).click();
+    await expect(form.getByLabel("Pages")).toHaveValue("1");
+    const downloading = page.waitForEvent("download");
+    await form.getByRole("button", { name: "Download", exact: true }).click();
+    const download = await downloading;
+    expect(download.suggestedFilename()).toBe("paper (pages 1).pdf");
+    const bytes = await readFile(await download.path());
+    expect(bytes.subarray(0, 5).toString()).toBe("%PDF-");
+
+    // A bad list shows the server's message and downloads nothing.
+    await page.getByRole("button", { name: "Download pages…" }).click();
+    await form.getByLabel("Pages").fill("3-x");
+    await form.getByRole("button", { name: "Download", exact: true }).click();
+    await expect(form.getByRole("alert")).toContainText("3-x");
+    await page.keyboard.press("Escape");
   });
 
   expect(errors).toEqual([]);

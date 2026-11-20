@@ -47,7 +47,8 @@ Something not working? See [Troubleshooting](#troubleshooting).
 
 ## What works today
 
-- Projects: create, rename, delete; import a ZIP (Prism, Overleaf, arXiv) and download one.
+- Projects: create, rename, delete; import a ZIP (Prism, Overleaf, arXiv); download one as ZIP
+  or 7z.
 - Editor: file tree, tabs, LaTeX highlighting, autosave. A file changed by another program
   reloads by itself; if you had unsaved edits too, you choose which version to keep.
 - Compilation with latexmk (pdfLaTeX, XeLaTeX, LuaLaTeX, chosen automatically or per
@@ -58,6 +59,9 @@ Something not working? See [Troubleshooting](#troubleshooting).
   (`\usepackage[T5]{fontenc}` or `[vietnamese]{babel}`), and pdfLaTeX for the rest.
 - PDF preview that keeps your place when it reloads. Click a line of the PDF to jump to its
   source; `Ctrl+Alt+→` in the editor highlights the line in the PDF.
+  Download the whole PDF, or only some pages: "Download pages…" takes a list such as
+  `3-7, 10` (filled in with the page you are reading) and gives a smaller PDF of those pages.
+  Links between the pages you keep still work; bookmarks are dropped.
 - Capture and ask: drag over part of the PDF (a formula, a table, a figure) and it goes to
   the assistant as an image, with its page and the source line it comes from, ready for
   your question. `Esc` while dragging cancels; a message takes up to four images. The

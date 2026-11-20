@@ -1,4 +1,4 @@
-//! ZIP import and export of projects, and detection of the main `.tex` file.
+//! ZIP import, ZIP and 7z export of projects, and detection of the main `.tex` file.
 //!
 //! Import is defensive: archives come from other tools (Prism, Overleaf, arXiv) or other
 //! people. Entries that would escape the project (zip-slip), symbolic links and OS junk are
@@ -41,6 +41,8 @@ pub enum ArchiveError {
     TooLarge(u64),
     #[error("the archive contains no files")]
     Empty,
+    #[error("cannot write the 7z archive: {0}")]
+    SevenZ(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -210,6 +212,27 @@ pub fn export_zip<W: Write + Seek>(root: &Path, writer: W) -> Result<W, ArchiveE
         }
     }
     Ok(zip.finish()?)
+}
+
+/// Writes every file and directory of `root` into a 7z archive (LZMA2), with the same entries
+/// as [`export_zip`].
+pub fn export_7z<W: Write + Seek>(root: &Path, writer: W) -> Result<W, ArchiveError> {
+    let seven_z = |err: sevenz_rust2::Error| ArchiveError::SevenZ(err.to_string());
+    let mut archive = sevenz_rust2::ArchiveWriter::new(writer).map_err(seven_z)?;
+    let entries = list_tree(root).map_err(|err| ArchiveError::Invalid(err.to_string()))?;
+    for entry in entries {
+        let rel =
+            RelPath::parse(&entry.path).map_err(|err| ArchiveError::Invalid(err.to_string()))?;
+        let path = rel.to_path(root);
+        // `from_path` keeps the modification time and whether it is a directory.
+        let item = sevenz_rust2::ArchiveEntry::from_path(&path, entry.path.clone());
+        let reader = match entry.kind {
+            EntryKind::Dir => None,
+            EntryKind::File => Some(std::fs::File::open(&path)?),
+        };
+        archive.push_archive_entry(item, reader).map_err(seven_z)?;
+    }
+    Ok(archive.finish()?)
 }
 
 /// Finds the `.tex` file that holds `\documentclass`, preferring conventional names
@@ -402,6 +425,39 @@ mod tests {
             std::fs::read_to_string(dest.path().join("figs/a.txt")).unwrap(),
             "a"
         );
+    }
+
+    #[test]
+    fn export_7z_holds_every_file_and_directory() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(src.path().join("drafts")).unwrap();
+        std::fs::create_dir_all(src.path().join("figures")).unwrap();
+        std::fs::write(src.path().join("main.tex"), "\\documentclass{article}\n").unwrap();
+        let image: Vec<u8> = (0..=255u8).cycle().take(70_000).collect();
+        std::fs::write(src.path().join("figures/plot.png"), &image).unwrap();
+
+        let data = export_7z(src.path(), Cursor::new(Vec::new()))
+            .unwrap()
+            .into_inner();
+        assert!(data.starts_with(&[b'7', b'z', 0xBC, 0xAF, 0x27, 0x1C]));
+
+        let mut reader =
+            sevenz_rust2::ArchiveReader::new(Cursor::new(data), sevenz_rust2::Password::empty())
+                .unwrap();
+        let mut found = std::collections::BTreeMap::new();
+        reader
+            .for_each_entries(|entry, content| {
+                let mut bytes = Vec::new();
+                content.read_to_end(&mut bytes).unwrap();
+                found.insert(entry.name().to_owned(), (entry.is_directory(), bytes));
+                Ok(true)
+            })
+            .unwrap();
+        let names: Vec<_> = found.keys().map(String::as_str).collect();
+        assert_eq!(names, ["drafts", "figures", "figures/plot.png", "main.tex"]);
+        assert!(found["drafts"].0);
+        assert_eq!(found["figures/plot.png"].1, image);
+        assert_eq!(found["main.tex"].1, b"\\documentclass{article}\n");
     }
 
     #[test]

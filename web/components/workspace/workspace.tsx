@@ -7,7 +7,6 @@ import {
   Bot,
   CircleCheck,
   CircleX,
-  Download,
   History,
   LoaderCircle,
   Play,
@@ -40,6 +39,7 @@ import {
 import { SuggestionsToggle } from "@/components/editor/suggestions-toggle";
 import { HistoryPanel } from "@/components/history/history-panel";
 import { Button, IconButton } from "@/components/ui/button";
+import { DownloadMenu } from "@/components/ui/download-menu";
 import { addImages, type DraftImage, MAX_IMAGES } from "@/lib/ai/images";
 import { prepareImage } from "@/lib/ai/prepare-image";
 import {
@@ -891,14 +891,7 @@ export default function Workspace({
         >
           <Settings className="size-4" />
         </Link>
-        <a
-          href={`/api/projects/${id}/export`}
-          aria-label="Download project as ZIP"
-          title="Download project as ZIP"
-          className="inline-flex size-7 items-center justify-center rounded-md text-muted hover:bg-zinc-200/60 hover:text-foreground dark:hover:bg-zinc-800/60"
-        >
-          <Download className="size-4" />
-        </a>
+        <DownloadMenu projectId={id} />
       </header>
 
       {notice && (

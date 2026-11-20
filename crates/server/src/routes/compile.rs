@@ -1,7 +1,7 @@
 use std::convert::Infallible;
 use std::time::Duration;
 
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -9,6 +9,10 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures_util::{Stream, StreamExt};
 use openprism_core::compile::{CONSOLE_FILE, LOG_FILE, PDF_FILE, SYNCTEX_FILE};
+use openprism_core::pdf_pages::{
+    MAX_PDF_BYTES, PdfPages, PdfPagesError, describe_pages, parse_pages,
+};
+use serde::Deserialize;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tower::ServiceExt;
@@ -18,6 +22,7 @@ use crate::compiler::{self, CompileResult, CompileStarted};
 use crate::error::ApiError;
 use crate::events::ProjectEvent;
 use crate::projects;
+use crate::routes::projects::content_disposition;
 use crate::state::AppState;
 
 pub fn routes() -> Router<AppState> {
@@ -25,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/{id}/compile", post(start))
         .route("/projects/{id}/compile/latest", get(latest))
         .route("/projects/{id}/compile/{run_id}", get(show))
+        .route("/projects/{id}/runs/{run_id}/pages", get(pages))
         .route("/projects/{id}/runs/{run_id}/{file}", get(output))
         .route("/projects/{id}/events", get(events))
 }
@@ -91,6 +97,76 @@ async fn output(
         HeaderValue::from_static("private, max-age=31536000, immutable"),
     );
     Ok(response.into_response())
+}
+
+#[derive(Debug, Deserialize)]
+struct PagesQuery {
+    pages: Option<String>,
+}
+
+/// Some pages of a run's PDF (`?pages=3-7, 10`), as a smaller PDF. Like the run's other files it
+/// never changes, so it may be cached for good.
+async fn pages(
+    State(state): State<AppState>,
+    Path((id, run_id)): Path<(String, String)>,
+    Query(query): Query<PagesQuery>,
+) -> Result<Response, ApiError> {
+    let project = projects::get(&state, &id).await?;
+    compiler::load(&state, &id, &run_id).await?;
+    let path = state.paths.run_dir(&id, &run_id).join(PDF_FILE);
+    let size = match tokio::fs::metadata(&path).await {
+        Ok(metadata) => metadata.len(),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Err(ApiError::not_found("this run has no PDF"));
+        }
+        Err(err) => return Err(ApiError::internal(err)),
+    };
+    if size > MAX_PDF_BYTES {
+        return Err(ApiError::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "pdf_too_large",
+            format!(
+                "the PDF is larger than {} MB; download the whole file instead",
+                MAX_PDF_BYTES / (1024 * 1024)
+            ),
+        ));
+    }
+    let spec = query.pages.unwrap_or_default();
+    let (pdf, label) = tokio::task::spawn_blocking(move || -> Result<_, ApiError> {
+        let source = std::fs::read(&path).map_err(ApiError::internal)?;
+        let document = PdfPages::load(&source).map_err(|err| {
+            ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "unreadable_pdf",
+                format!(
+                    "cannot extract pages from this PDF ({err}); download the whole file instead"
+                ),
+            )
+        })?;
+        let keep = parse_pages(&spec, document.page_count())
+            .map_err(|err| ApiError::bad_request(err.to_string()))?;
+        let pdf = document.extract(&keep).map_err(|err| match err {
+            PdfPagesError::Unreadable(_) | PdfPagesError::Write(_) => ApiError::internal(err),
+        })?;
+        Ok((pdf, describe_pages(&keep)))
+    })
+    .await??;
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/pdf".to_owned()),
+            (header::CONTENT_LENGTH, pdf.len().to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                content_disposition(&format!("{} (pages {label}).pdf", project.name)),
+            ),
+            (
+                header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable".to_owned(),
+            ),
+        ],
+        pdf,
+    )
+        .into_response())
 }
 
 /// Server-sent events of one project: file changes and compilations (`ProjectEvent` JSON).
