@@ -30,8 +30,11 @@ dev: setup
     wait
 
 # Production build: release API binary + standalone Next.js server
-build: setup
+build: setup build-web
     cargo build --release -p openprism-server
+
+# Standalone build of the web app, with the files `next build` leaves out of it
+build-web: setup
     pnpm -C web build
     cp -r web/public web/.next/standalone/
     cp -r web/.next/static web/.next/standalone/.next/
@@ -56,6 +59,11 @@ test-live:
     set -euo pipefail
     if [ -f .env ]; then set -a; source .env; set +a; fi
     OPENPRISM_LIVE=1 cargo test -p openprism-ai --test live -- --ignored --nocapture --test-threads 1
+
+# End-to-end tests in Chromium against the built app (debug API, standalone web app)
+e2e *args: build-web
+    cargo build -p openprism-server
+    pnpm -C web e2e {{args}}
 
 # Lint everything (what CI runs)
 lint:
