@@ -48,6 +48,11 @@ pub struct ServeArgs {
     /// Node.js (22 or newer) used to run the web app.
     #[arg(long, env = "OPENPRISM_NODE", default_value = "node")]
     pub node: PathBuf,
+
+    /// Open the sign-in link in the default browser (`$BROWSER` when set) once the web app is
+    /// ready. When Open Prism already runs on these ports, only open it and exit.
+    #[arg(long, env = "OPENPRISM_OPEN")]
+    pub open: bool,
 }
 
 /// What `serve --web` runs: the standalone build in `dir`, with `node`, on `port`.
@@ -56,6 +61,8 @@ pub struct WebOptions {
     pub dir: PathBuf,
     pub port: u16,
     pub node: PathBuf,
+    /// Open the sign-in link in the browser (`--open`).
+    pub open: bool,
 }
 
 impl Args {
@@ -80,10 +87,12 @@ impl Args {
                 web: Some(dir),
                 web_port,
                 node,
+                open,
             })) => Some(WebOptions {
                 dir: dir.clone(),
                 port: *web_port,
                 node: node.clone(),
+                open: *open,
             }),
             _ => None,
         }
@@ -116,12 +125,19 @@ mod tests {
                 dir: PathBuf::from("web/.next/standalone"),
                 port: 3799,
                 node: PathBuf::from("node"),
+                open: false,
             })
         );
         let args = parse(&["serve", "--web", "d", "--node", "/opt/node/bin/node"]);
         assert_eq!(
             args.web().unwrap().node,
             PathBuf::from("/opt/node/bin/node")
+        );
+        assert!(
+            parse(&["serve", "--web", "d", "--open"])
+                .web()
+                .unwrap()
+                .open
         );
     }
 
