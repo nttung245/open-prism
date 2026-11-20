@@ -3,7 +3,7 @@
 //! dies, and stops it on shutdown.
 
 use std::collections::VecDeque;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -28,6 +28,10 @@ const STOP_GRACE: Duration = Duration::from_secs(5);
 /// The web app giving up: this many exits within `EXIT_PERIOD`.
 const MAX_EXITS: usize = 3;
 const EXIT_PERIOD: Duration = Duration::from_secs(60);
+/// How long to wait for the program that opens the browser. Some openers stay until the
+/// browser closes, so one still running by then is taken as having worked.
+const OPEN_WAIT: Duration = Duration::from_secs(3);
+const HEALTH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The major version in `node --version` output such as `v22.11.0`.
 pub fn parse_node_version(output: &str) -> Option<u32> {
@@ -93,6 +97,104 @@ pub fn check_web_port(port: u16) -> anyhow::Result<()> {
         ),
         Err(err) => bail!("cannot listen on 127.0.0.1:{port}: {err}"),
     }
+}
+
+/// Whether something already listens on 127.0.0.1:`port`.
+pub fn port_in_use(port: u16) -> bool {
+    matches!(
+        std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)),
+        Err(err) if err.kind() == std::io::ErrorKind::AddrInUse
+    )
+}
+
+/// Whether the web app answering on 127.0.0.1:`port` is Open Prism: its `/api/health` returns
+/// the API's version and TeX engines.
+pub async fn is_open_prism(port: u16) -> bool {
+    let Ok(client) = reqwest::Client::builder()
+        .timeout(HEALTH_TIMEOUT)
+        .no_proxy()
+        .build()
+    else {
+        return false;
+    };
+    let Ok(response) = client
+        .get(format!("http://127.0.0.1:{port}/api/health"))
+        .send()
+        .await
+    else {
+        return false;
+    };
+    if !response.status().is_success() {
+        return false;
+    }
+    let Ok(health) = response.json::<serde_json::Value>().await else {
+        return false;
+    };
+    health
+        .get("version")
+        .is_some_and(serde_json::Value::is_string)
+        && health
+            .get("engines")
+            .is_some_and(serde_json::Value::is_array)
+}
+
+/// The program (and its first arguments) that opens a link in the browser: the first entry of
+/// `$BROWSER` (`browser`) when set, else the system's own opener.
+pub fn browser_command(browser: Option<OsString>) -> (OsString, Vec<&'static str>) {
+    if let Some(first) = browser
+        .as_deref()
+        .map(OsStr::to_string_lossy)
+        .and_then(|list| list.split(':').next().map(str::trim).map(str::to_owned))
+        .filter(|first| !first.is_empty())
+    {
+        return (first.into(), Vec::new());
+    }
+    if cfg!(target_os = "macos") {
+        ("open".into(), Vec::new())
+    } else if cfg!(windows) {
+        ("cmd".into(), vec!["/C", "start", ""])
+    } else {
+        ("xdg-open".into(), Vec::new())
+    }
+}
+
+/// Runs `program args… link` to open `link`, waiting at most `wait` for it. Returns whether it
+/// worked; a failure is logged as a warning and is never fatal.
+pub async fn open_link(program: &OsStr, args: &[&str], link: &str, wait: Duration) -> bool {
+    let name = Path::new(program).display().to_string();
+    let child = Command::new(program)
+        .args(args)
+        .arg(link)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(err) => {
+            tracing::warn!(program = %name, %err, "cannot open the browser; open the link by hand");
+            return false;
+        }
+    };
+    match tokio::time::timeout(wait, child.wait()).await {
+        Ok(Ok(status)) if status.success() => true,
+        Ok(Ok(status)) => {
+            tracing::warn!(program = %name, %status, "cannot open the browser; open the link by hand");
+            false
+        }
+        Ok(Err(err)) => {
+            tracing::warn!(program = %name, %err, "cannot open the browser; open the link by hand");
+            false
+        }
+        // Still running: the opener is the browser itself, which has the link.
+        Err(_) => true,
+    }
+}
+
+/// Opens `link` in the default browser (`$BROWSER` when set).
+pub async fn open_in_browser(link: &str) -> bool {
+    let (program, args) = browser_command(std::env::var_os("BROWSER"));
+    open_link(&program, &args, link, OPEN_WAIT).await
 }
 
 /// The recent exits of the web app, to stop restarting it when it keeps dying.
@@ -422,6 +524,95 @@ mod tests {
     }
 
     #[test]
+    fn the_browser_is_browser_first_then_the_system_opener() {
+        assert_eq!(
+            browser_command(Some("firefox:chromium".into())).0,
+            OsString::from("firefox")
+        );
+        assert_eq!(
+            browser_command(Some("/opt/b/browser".into())).0,
+            OsString::from("/opt/b/browser")
+        );
+        let system = browser_command(None);
+        assert_eq!(browser_command(Some("  ".into())), system);
+        #[cfg(target_os = "linux")]
+        assert_eq!(system, (OsString::from("xdg-open"), Vec::new()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn open_link_runs_the_opener_with_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let seen = dir.path().join("seen");
+        let script = format!("printf %s \"$0\" > '{}'", seen.display());
+        let link = "http://127.0.0.1:3737/login?token=abc";
+        assert!(
+            open_link(
+                OsStr::new("/bin/sh"),
+                &["-c", &script],
+                link,
+                Duration::from_secs(5)
+            )
+            .await
+        );
+        assert_eq!(std::fs::read_to_string(&seen).unwrap(), link);
+
+        // A failing or missing opener is reported, never fatal.
+        assert!(!open_link(OsStr::new("/bin/false"), &[], link, Duration::from_secs(5)).await);
+        assert!(
+            !open_link(
+                OsStr::new("/nonexistent/browser"),
+                &[],
+                link,
+                Duration::from_secs(5)
+            )
+            .await
+        );
+        // One that keeps running is the browser itself: it worked.
+        assert!(
+            open_link(
+                OsStr::new("/bin/sh"),
+                &["-c", "sleep 5"],
+                link,
+                Duration::from_millis(200)
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn recognises_open_prism_by_its_health_answer() {
+        async fn serve(body: serde_json::Value) -> u16 {
+            let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let app = axum::Router::new().route(
+                "/api/health",
+                axum::routing::get(move || {
+                    let body = body.clone();
+                    async move { axum::Json(body) }
+                }),
+            );
+            tokio::spawn(async move { axum::serve(listener, app).await });
+            port
+        }
+        let prism = serve(serde_json::json!({"version": "0.1.0", "engines": []})).await;
+        assert!(is_open_prism(prism).await);
+        let other = serve(serde_json::json!({"status": "ok"})).await;
+        assert!(!is_open_prism(other).await);
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+        let nothing = socket.local_addr().unwrap().port();
+        assert!(!is_open_prism(nothing).await);
+        assert!(port_in_use(prism));
+        // A port held without listening is taken too; once released it is free.
+        assert!(port_in_use(nothing));
+        drop(socket);
+        assert!(!port_in_use(nothing));
+    }
+
+    #[test]
     fn sign_in_links_escape_the_token() {
         let token = "0123456789abcdef".repeat(4);
         assert_eq!(
@@ -495,9 +686,14 @@ mod tests {
             }
         }
 
-        fn free_port() -> u16 {
-            let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-            listener.local_addr().unwrap().port()
+        /// A port nothing listens on, held for as long as the socket lives: bound but not
+        /// listening, so connecting is refused and no other test can take the port meanwhile
+        /// (a port picked and released at once could be handed to a test running alongside).
+        fn reserved_port() -> (tokio::net::TcpSocket, u16) {
+            let socket = tokio::net::TcpSocket::new_v4().unwrap();
+            socket.bind((Ipv4Addr::LOCALHOST, 0).into()).unwrap();
+            let port = socket.local_addr().unwrap().port();
+            (socket, port)
         }
 
         /// Pretends the web app listens, so the supervisor sees it ready at once.
@@ -525,8 +721,9 @@ mod tests {
 
         #[tokio::test]
         async fn dying_before_ready_is_an_error() {
+            let (_socket, port) = reserved_port();
             let (ready, readied) = oneshot::channel();
-            let err = fake(free_port(), "exit 3")
+            let err = fake(port, "exit 3")
                 .supervise(CancellationToken::new(), ready)
                 .await
                 .unwrap_err()
@@ -539,8 +736,9 @@ mod tests {
         async fn not_listening_in_time_is_an_error() {
             let dir = tempfile::tempdir().unwrap();
             let pid_file = dir.path().join("pid");
+            let (_socket, port) = reserved_port();
             let mut web = fake(
-                free_port(),
+                port,
                 &format!("echo $$ > {}; exec sleep 60", pid_file.display()),
             );
             web.ready_timeout = Duration::from_millis(500);

@@ -9,8 +9,47 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
 ## Quickstart
 
 Open Prism runs on your own computer: the API and the web app listen on `127.0.0.1` only,
-and your projects stay in a folder on your disk. Tested on Linux; macOS and Windows are not
-tested yet.
+and your projects stay in a folder on your disk. On Linux, download a release; on other
+systems, build it from source.
+
+### Download a release (Linux)
+
+**You need:** Linux x64 or arm64 with glibc 2.35 or newer (Ubuntu 22.04, Debian 12, Fedora 36
+or newer) and [Docker](https://docs.docker.com/get-docker/) for TeX. Your user must be able to
+run `docker` without `sudo`. The package brings everything else, Node.js included.
+
+Download `open-prism-<version>-linux-x64.tar.gz` (or `-arm64`) from the
+[Releases page](https://github.com/nttung245/open-prism/releases), then:
+
+```sh
+docker pull texlive/texlive:latest   # TeX Live: a 2.6 GB download, about 9 GB on disk; once
+tar -xzf open-prism-<version>-linux-x64.tar.gz
+cd open-prism-<version>-linux-x64
+./open-prism                         # starts Open Prism and opens the sign-in page
+```
+
+Your browser opens once Open Prism is ready; the sign-in link is printed too. Stop it with
+Ctrl+C or by closing the terminal window. `./open-prism install-desktop` adds **Open Prism**
+to the application menu (it runs in a terminal window; close the window to stop it), and
+`./open-prism uninstall-desktop` removes it. If you move the folder, run `install-desktop`
+again. `README.txt` in the folder lists the other commands, such as other ports and
+`OPENPRISM_NO_BROWSER=1` for a machine without a screen.
+
+To check the download, run this in the folder with the `.tar.gz` and `SHA256SUMS` (from the
+same release) and, with the [GitHub CLI](https://cli.github.com/), check that GitHub Actions
+built it from this repository:
+
+```sh
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify open-prism-<version>-linux-x64.tar.gz --repo nttung245/open-prism
+```
+
+Projects and settings live in `~/.local/share/open-prism`, not in the release folder, so a
+newer release can replace the folder.
+
+### Build from source
+
+Tested on Linux; macOS and Windows are not tested yet.
 
 **You need:** [Git](https://git-scm.com/),
 [rustup](https://rustup.rs/) (the right Rust version is installed on the first build),
@@ -31,7 +70,9 @@ Open the link it prints (`http://127.0.0.1:3737/login?token=…`). To use other 
 `./target/release/open-prism-api serve --web web/.next/standalone`; see
 [Configuration](#configuration) for its options.
 
-Then give the assistant a model:
+### Give the assistant a model
+
+Once signed in, either way:
 
 1. Click **Settings** on the project list. Under **Add a provider**, pick the type, paste
    your API key and click **Add provider**. See [AI providers](#ai-providers) for where to
@@ -196,7 +237,10 @@ Without tool calling, the assistant still works through SEARCH/REPLACE blocks.
 
 **"port … on 127.0.0.1 is already in use".** Another program, often an Open Prism still
 running, holds the port. Stop it, or pick other ports: `--port` for the API (8787) and
-`--web-port` for the web app (3737); with `just start`, set `OPENPRISM_PORT` and `WEB_PORT`.
+`--web-port` for the web app (3737), as in `./open-prism --port 8799 --web-port 3799`; with
+`just start`, set `OPENPRISM_PORT` and `WEB_PORT`. (With `--open`, which `./open-prism` uses,
+an Open Prism already running on those ports is not an error: the sign-in page just opens
+again.)
 If `open-prism-api` was killed outright (`kill -9`), its web app keeps running: stop the
 leftover `node server.js`.
 
@@ -213,9 +257,14 @@ starts, so fix the cause and start it again:
 
 A native TeX Live (`latexmk`) or [Tectonic](https://tectonic-typesetting.github.io/) works too.
 
-**Lost the sign-in link.** Run `./target/release/open-prism-api print-token` (add the same
-`--data-dir` if you use one) and paste the token on the `/login` page, or open
+**Lost the sign-in link.** Run `./open-prism print-token` in the release folder, or
+`./target/release/open-prism-api print-token` in a source build (add the same `--data-dir` if
+you use one), and paste the token on the `/login` page, or open
 `http://127.0.0.1:3737/login?token=<token>`.
+
+**The browser does not open.** `./open-prism` opens the sign-in page with `$BROWSER` if it is
+set, otherwise `xdg-open`. If neither works, the log says "cannot open the browser" and Open
+Prism keeps running: open the printed link yourself.
 
 **Letters missing in the PDF (Vietnamese and other accented text).** With the engine on
 Auto, Open Prism picks XeLaTeX for Vietnamese text unless the T5 encoding is set up. If a
@@ -245,16 +294,24 @@ Open Prism and copy the folder.
 | `OPENPRISM_API_URL` | web (set by `serve --web`) | `http://127.0.0.1:8787` |
 | `OPENPRISM_WEB_PORT` | `serve --web` | `3737` |
 | `OPENPRISM_NODE` | `serve --web` | `node` from `PATH` |
+| `OPENPRISM_OPEN` | `serve --web` | off (`true` is the same as `--open`) |
+| `OPENPRISM_NO_BROWSER` | `./open-prism` in a release | unset (`1` leaves out `--open`) |
 | `WEB_PORT` | `just dev` / `just start` | `3737` |
 
 Most have a flag too: `--data-dir`, `--port` and `--tex-image`, and after `serve`,
-`--web-port` and `--node` (`open-prism-api --help` lists them).
+`--web-port`, `--node` and `--open` (`open-prism-api --help` lists them).
 
 `serve --web` checks for Node.js and the build and that both ports are free. It then starts
 the web app and prints the sign-in link once the web app is ready. The web app's output shows
 up in the log, marked `web`. If the web app crashes it is restarted; after three crashes within
-a minute everything stops with an error. Ctrl+C stops both. Without `--web`, only the API
-runs.
+a minute everything stops with an error. Ctrl+C, SIGTERM, or closing the terminal (SIGHUP)
+stops both. Without `--web`, only the API runs.
+
+With `--open`, the sign-in link also opens in the browser (`$BROWSER`, otherwise `xdg-open`,
+`open` on macOS or `start` on Windows). If an Open Prism is already running on those ports,
+`serve --open` opens its sign-in page and exits instead of failing. The `open-prism` script of
+a release runs `serve --web` with the bundled web app and Node.js, and adds `--open` unless
+`OPENPRISM_NO_BROWSER=1`.
 
 **Signing in.** On first start the API creates a random access token in
 `<data dir>/access-token` (mode 0600). The sign-in link carries it; the `/login` page also
@@ -310,6 +367,7 @@ just e2e                # end-to-end test in Chromium on the built app (Playwrig
 cargo test -p openprism-ai --test ollama -- --ignored --nocapture   # against a local Ollama
 just lint               # what CI runs
 just gen-types          # regenerate web/lib/api/types after changing API types
+just package            # release package for this machine in target/dist, then run it once
 ```
 
 CI tests the AI layer against fake providers (wiremock), so it needs no keys. `just test-live`
@@ -322,6 +380,26 @@ model that the test runs itself. It uses ports 3798, 8798 and 8797 (`E2E_WEB_POR
 `E2E_API_PORT`, `E2E_MODEL_PORT`) and a fresh data dir in `web/test-results/`, where the
 server log, traces and screenshots of a failed run stay. Run `pnpm exec playwright install
 chromium` in `web/` once first.
+
+### Releasing
+
+The [Release workflow](.github/workflows/release.yml) builds a package for Linux x64 and one
+for arm64 on Ubuntu 22.04: the API, the standalone web app, the official Node.js
+(`scripts/package-release.sh`, which pins its version and SHA-256) and the
+[`open-prism` script](packaging/open-prism). It then runs each package once
+(`scripts/smoke-release.sh`): start, the web app and the API answer, a clean stop. `just
+package` does the same for your machine.
+
+1. Set the new `version` in `Cargo.toml` (`[workspace.package]`). Check for a newer Node.js 22
+   release with security fixes, and if there is one, update `NODE_VERSION` and both checksums
+   in `scripts/package-release.sh`.
+2. Merge to `main`.
+3. Run the workflow by hand (Actions → Release → Run workflow): it builds and tests both
+   packages without releasing anything. Pull requests that change the packaging run it too.
+4. Push the tag: `git tag v<version> && git push origin v<version>`. The workflow refuses a tag
+   that differs from `Cargo.toml`. When both packages pass, it makes a **draft** release with
+   them, `SHA256SUMS` and build provenance attestations.
+5. Look over the draft on the Releases page, then publish it.
 
 ## Roadmap
 

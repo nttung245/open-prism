@@ -43,6 +43,16 @@ build-web: setup
 start:
     ./target/release/open-prism-api serve --web web/.next/standalone --port {{api_port}} --web-port {{web_port}}
 
+# Release package for this machine (Linux x64 or arm64) in target/dist, as the release workflow makes it, then run it once
+package: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; *) echo "no release package for $(uname -m)" >&2; exit 1 ;; esac
+    id=$(cargo pkgid -p openprism-server)
+    version=${id##*[@#]}
+    scripts/package-release.sh "$version" "$arch"
+    scripts/smoke-release.sh "target/dist/open-prism-$version-linux-$arch.tar.gz"
+
 # Print the access token
 token:
     @cargo run -q -p openprism-server -- print-token

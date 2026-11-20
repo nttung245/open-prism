@@ -1,0 +1,77 @@
+#!/bin/sh
+# Open Prism, run from this folder: the API, and the web app on the Node.js shipped next to it.
+#
+#   ./open-prism                    start it; the browser opens (OPENPRISM_NO_BROWSER=1 to skip)
+#   ./open-prism --port 8799 ...    the same, with options of `open-prism-api serve`
+#   ./open-prism print-token        other commands go to open-prism-api as they are
+#   ./open-prism install-desktop    add Open Prism to the application menu
+#   ./open-prism uninstall-desktop  remove it from the menu
+set -eu
+
+here=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd -P)
+api="$here/bin/open-prism-api"
+data_home=${XDG_DATA_HOME:-$HOME/.local/share}
+apps="$data_home/applications"
+icons="$data_home/icons/hicolor/scalable/apps"
+
+refresh_menu() {
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$apps" >/dev/null 2>&1 || true
+  fi
+}
+
+install_desktop() {
+  case "$here" in
+    *[\"\`\$\\]*)
+      echo "open-prism: move this folder to a path without \" \` \$ or \\ first: $here" >&2
+      exit 1
+      ;;
+  esac
+  mkdir -p "$apps" "$icons"
+  cp "$here/share/open-prism.svg" "$icons/open-prism.svg"
+  # In Exec, % starts a field code: a literal one is written %%.
+  command=$(printf '%s' "$here/open-prism" | sed 's/%/%%/g')
+  cat > "$apps/open-prism.desktop" <<DESKTOP
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Open Prism
+Comment=LaTeX editor with AI assistance
+Exec="$command"
+Icon=open-prism
+Terminal=true
+Categories=Office;Publishing;
+DESKTOP
+  refresh_menu
+  echo "Open Prism is now in the application menu. It runs in a terminal window: close it to stop."
+  echo "If you move this folder, run ./open-prism install-desktop again."
+}
+
+uninstall_desktop() {
+  rm -f "$apps/open-prism.desktop" "$icons/open-prism.svg"
+  refresh_menu
+  echo "Open Prism is no longer in the application menu."
+}
+
+case "${1:-}" in
+  install-desktop) install_desktop; exit 0 ;;
+  uninstall-desktop) uninstall_desktop; exit 0 ;;
+esac
+
+# Commands other than serving go to open-prism-api unchanged.
+for arg do
+  case "$arg" in
+    print-token | help | -h | --help | -V | --version) exec "$api" "$@" ;;
+  esac
+done
+
+# Serve with this folder's web app and Node.js; a `serve` typed by hand is dropped.
+for arg do
+  shift
+  [ "$arg" = serve ] || set -- "$@" "$arg"
+done
+open=--open
+if [ "${OPENPRISM_NO_BROWSER:-}" = 1 ]; then
+  open=
+fi
+exec "$api" serve --web "$here/web" --node "$here/node/bin/node" ${open:+"$open"} "$@"

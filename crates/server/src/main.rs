@@ -68,6 +68,22 @@ async fn main() -> anyhow::Result<()> {
     }
     let sign_in_token = token.expose().to_owned();
 
+    // `serve --web --open` again while Open Prism runs (a second click on its menu entry):
+    // show the running one instead of failing on a busy port.
+    if let Some(options) = &web_options
+        && options.open
+        && (web::port_in_use(args.port) || web::port_in_use(options.port))
+        && web::is_open_prism(options.port).await
+    {
+        let link = web::sign_in_link(
+            &format!("http://127.0.0.1:{}", options.port),
+            &sign_in_token,
+        );
+        println!("\n  Open Prism is already running. Open this link to sign in:\n  {link}\n");
+        web::open_in_browser(&link).await;
+        return Ok(());
+    }
+
     let engines = detect_engines(&DetectOptions {
         search_path: None,
         docker_image: args.docker_image(),
@@ -113,16 +129,18 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!(dir = %dir.display(), "starting the web app");
     let web = web::WebServer::next(options.node, dir, options.port, args.port);
     let link = web::sign_in_link(&web.url(), &sign_in_token);
-    run_with_web(listener, app, web, link).await
+    run_with_web(listener, app, web, link, options.open).await
 }
 
-/// Serves the API with the web app next to it, until Ctrl+C / SIGTERM or until one of them
-/// fails. The web app stops first, so it never sends requests to a closed API.
+/// Serves the API with the web app next to it, until Ctrl+C / SIGTERM / SIGHUP or until one of
+/// them fails. The web app stops first, so it never sends requests to a closed API. With `open`,
+/// the sign-in link opens in the browser once the web app is ready.
 async fn run_with_web(
     listener: TcpListener,
     app: axum::Router,
     web: web::WebServer,
     link: String,
+    open: bool,
 ) -> anyhow::Result<()> {
     let api_stop = CancellationToken::new();
     let mut api = tokio::spawn({
@@ -150,6 +168,10 @@ async fn run_with_web(
                 announced = true;
                 if result.is_ok() {
                     println!("\n  Open Prism is running. Open this link to sign in:\n  {link}\n");
+                    if open {
+                        let link = link.clone();
+                        tokio::spawn(async move { web::open_in_browser(&link).await });
+                    }
                 }
             }
         }
@@ -230,9 +252,23 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
+    // The terminal it runs in was closed (a window opened from the application menu).
+    #[cfg(unix)]
+    let hangup = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(err) => tracing::error!(%err, "cannot listen for SIGHUP"),
+        }
+    };
+    #[cfg(not(unix))]
+    let hangup = std::future::pending::<()>();
+
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
+        () = hangup => {},
     }
     tracing::info!("shutting down");
 }

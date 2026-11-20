@@ -1,0 +1,130 @@
+name: Release
+
+# A tag v<version> builds, packages and tests Open Prism for Linux x64 and arm64, then makes a
+# draft GitHub release with the packages, SHA256SUMS and build provenance; a person publishes it.
+# Run by hand, or on a pull request that changes the packaging, it stops before the release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - packaging/**
+      - scripts/package-release.sh
+      - scripts/smoke-release.sh
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  NEXT_TELEMETRY_DISABLED: 1
+
+jobs:
+  package:
+    name: Package (linux-${{ matrix.arch }})
+    # Built on Ubuntu 22.04 so the packages need only glibc 2.35. No caches: the packages are
+    # built from the tagged source alone.
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-22.04
+          - arch: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust from rust-toolchain.toml
+        run: |
+          if ! command -v rustup > /dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+            echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+            export PATH="$HOME/.cargo/bin:$PATH"
+          fi
+          rustup toolchain install
+      - name: Version, and on a tag, the tag matches it
+        id: version
+        run: |
+          id=$(cargo pkgid -p openprism-server)
+          version=${id##*[@#]}
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::The tag $GITHUB_REF_NAME is version ${GITHUB_REF_NAME#v}, but Cargo.toml says $version"
+            exit 1
+          fi
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: web/package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          package-manager-cache: false
+      - name: Launcher script
+        run: bash packaging/test-launcher.sh
+      - name: Build the API and the standalone web app
+        run: |
+          cargo build --release --locked -p openprism-server
+          pnpm -C web install --frozen-lockfile
+          pnpm -C web build
+          cp -r web/public web/.next/standalone/
+          cp -r web/.next/static web/.next/standalone/.next/
+      - name: Package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: scripts/package-release.sh "$VERSION" "$ARCH"
+      - name: Run the package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: scripts/smoke-release.sh "target/dist/open-prism-$VERSION-linux-$ARCH.tar.gz"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: open-prism-linux-${{ matrix.arch }}
+          path: target/dist/open-prism-*-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Draft release
+    needs: package
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: open-prism-linux-*
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        working-directory: dist
+        run: |
+          sha256sum -- *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*.tar.gz
+      - name: Draft release (published by a person, after a look)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+            --title "Open Prism ${TAG#v}" --generate-notes dist/*.tar.gz dist/SHA256SUMS

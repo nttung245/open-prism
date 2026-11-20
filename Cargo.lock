@@ -2088,6 +2088,7 @@ dependencies = [
  "nix",
  "openprism-ai",
  "openprism-core",
+ "reqwest",
  "serde",
  "serde_json",
  "sevenz-rust2",
