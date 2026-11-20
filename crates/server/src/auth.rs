@@ -121,6 +121,10 @@ async fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
         .await
         .with_context(|| format!("cannot create {}", path.display()))?;
     tokio::io::AsyncWriteExt::write_all(&mut file, contents.as_bytes()).await?;
+    // A tokio file hands writes to a background thread: wait for this one to land (and reach
+    // the disk), or a read right after, like `print-token`, can find the file still empty.
+    tokio::io::AsyncWriteExt::flush(&mut file).await?;
+    file.sync_all().await?;
     Ok(())
 }
 
