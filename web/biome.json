@@ -13,7 +13,9 @@
       "!.next",
       "!dist",
       "!build",
-      "!lib/api/types"
+      "!lib/api/types",
+      "!playwright-report",
+      "!test-results"
     ]
   },
   "formatter": {

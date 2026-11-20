@@ -302,6 +302,7 @@ just dev                # API + web app in development mode on 127.0.0.1, prints
 just test               # Rust and TypeScript tests, type check
 just test docker        # also compile real documents in the TeX Live container
 just test-live          # call the real OpenAI and Gemini APIs (keys from .env; a few cents)
+just e2e                # end-to-end test in Chromium on the built app (Playwright)
 cargo test -p openprism-ai --test ollama -- --ignored --nocapture   # against a local Ollama
 just lint               # what CI runs
 just gen-types          # regenerate web/lib/api/types after changing API types
@@ -310,6 +311,13 @@ just gen-types          # regenerate web/lib/api/types after changing API types
 CI tests the AI layer against fake providers (wiremock), so it needs no keys. `just test-live`
 reads `OPENAI_API_KEY` and `GOOGLE_AI_API_KEY` from a `.env` file at the repository root (git
 ignores it) or from the environment, and skips a provider without a key.
+
+`just e2e` builds the web app and a debug API, then runs `web/e2e` in Chromium: sign in, add a
+provider, import a ZIP, edit, compile, and accept an edit proposed by a fake OpenAI-compatible
+model that the test runs itself. It uses ports 3798, 8798 and 8797 (`E2E_WEB_PORT`,
+`E2E_API_PORT`, `E2E_MODEL_PORT`) and a fresh data dir in `web/test-results/`, where the
+server log, traces and screenshots of a failed run stay. Run `pnpm exec playwright install
+chromium` in `web/` once first.
 
 ## Roadmap
 
