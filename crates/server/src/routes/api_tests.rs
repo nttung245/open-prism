@@ -64,6 +64,11 @@ impl TestApp {
         }
     }
 
+    /// The response as it comes, for a body that does not end (server-sent events).
+    pub(super) async fn response(&self, request: Request<Body>) -> axum::response::Response {
+        self.router.clone().oneshot(request).await.unwrap()
+    }
+
     pub(super) fn request(method: Method, uri: &str) -> axum::http::request::Builder {
         Request::builder()
             .method(method)
@@ -495,7 +500,7 @@ async fn import_and_export_zip() {
 /// Written by a child process so this multi-threaded test binary never holds the script open
 /// for writing while another test forks (that makes exec fail with "Text file busy").
 #[cfg(unix)]
-fn fake_latexmk(dir: &std::path::Path) -> EngineInfo {
+pub(super) fn fake_latexmk(dir: &std::path::Path) -> EngineInfo {
     use std::process::{Command, Stdio};
     let path = dir.join("latexmk");
     let script = "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in -outdir=*) out=\"${a#-outdir=}\";; esac; done\n\
@@ -524,7 +529,7 @@ fn fake_latexmk(dir: &std::path::Path) -> EngineInfo {
 }
 
 /// Reads SSE frames until one of type `compileFinished` arrives.
-async fn wait_for_finish(body: Body) -> Value {
+pub(super) async fn wait_for_finish(body: Body) -> Value {
     let mut body = body;
     let mut buffer = String::new();
     loop {

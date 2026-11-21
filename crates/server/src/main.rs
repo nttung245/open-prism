@@ -9,6 +9,7 @@ mod events;
 mod history;
 mod image_latex;
 mod images;
+mod jobs;
 mod projects;
 mod routes;
 mod settings;
@@ -102,6 +103,32 @@ async fn main() -> anyhow::Result<()> {
 
     let state = AppState::open(&data_dir, token, engines).await?;
     let _watcher = watch_files(&state)?;
+    // Background jobs stop with the app; a job cut short resumes at the next start.
+    let jobs_stop = tokio_util::sync::CancellationToken::new();
+    let scheduler = tokio::spawn(jobs::run(state.clone(), jobs_stop.clone()));
+    tokio::spawn({
+        let stop = jobs_stop.clone();
+        async move {
+            shutdown_signal().await;
+            stop.cancel();
+        }
+    });
+    let served = serve(&args, state, web_options, web_dir, &sign_in_token).await;
+    jobs_stop.cancel();
+    if let Err(err) = scheduler.await {
+        tracing::warn!(%err, "the background job scheduler stopped badly");
+    }
+    served
+}
+
+/// Serves the API (and, with `serve --web`, the web app) until Ctrl+C / SIGTERM / SIGHUP.
+async fn serve(
+    args: &cli::Args,
+    state: AppState,
+    web_options: Option<cli::WebOptions>,
+    web_dir: Option<std::path::PathBuf>,
+    sign_in_token: &str,
+) -> anyhow::Result<()> {
     let app = routes::router(state.clone());
 
     // Never bind beyond loopback: the Next.js server is the only public entry point.
@@ -135,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
         );
     }
     let web = web::WebServer::next(options.node, dir, options.host, options.port, args.port);
-    let link = web::sign_in_link(&web.url(), &sign_in_token);
+    let link = web::sign_in_link(&web.url(), sign_in_token);
     run_with_web(listener, app, web, link, options.open).await
 }
 

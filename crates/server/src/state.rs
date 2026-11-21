@@ -10,6 +10,7 @@ use crate::auth::AccessToken;
 use crate::chat::RunningTurns;
 use crate::compiler::Compiler;
 use crate::events::EventHub;
+use crate::jobs::Jobs;
 use crate::synctex_cache::SyncTexCache;
 
 /// Shared, read-mostly application state.
@@ -27,6 +28,8 @@ pub struct Inner {
     pub compiler: Compiler,
     pub synctex: SyncTexCache,
     pub running_turns: RunningTurns,
+    /// Background jobs: the kinds the app knows and the job running now.
+    pub jobs: Jobs,
     /// One lock per project so a version check and the write that follows are atomic.
     write_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
@@ -50,6 +53,9 @@ pub struct DataPaths {
     pub history: PathBuf,
     /// `attachments/<project>/<thread>/`: images sent in AI conversations.
     pub attachments: PathBuf,
+    /// `jobs/<id>/`: working files of background jobs, outside `projects/` so the file watcher
+    /// never sees them.
+    pub jobs: PathBuf,
 }
 
 impl DataPaths {
@@ -70,6 +76,7 @@ impl DataPaths {
             tmp: root.join("tmp"),
             history: root.join("history"),
             attachments: root.join("attachments"),
+            jobs: root.join("jobs"),
             root,
         };
         for dir in [
@@ -80,6 +87,7 @@ impl DataPaths {
             &paths.tmp,
             &paths.history,
             &paths.attachments,
+            &paths.jobs,
         ] {
             std::fs::create_dir_all(dir)
                 .with_context(|| format!("cannot create {}", dir.display()))?;
@@ -101,6 +109,11 @@ impl DataPaths {
 
     pub fn run_dir(&self, id: &str, run_id: &str) -> PathBuf {
         self.runs.join(id).join(run_id)
+    }
+
+    /// Working files of one background job.
+    pub fn job_dir(&self, id: &str) -> PathBuf {
+        self.jobs.join(id)
     }
 
     pub fn history_dir(&self, id: &str) -> PathBuf {
@@ -135,6 +148,7 @@ impl AppState {
             events: EventHub::default(),
             synctex: SyncTexCache::default(),
             running_turns: RunningTurns::default(),
+            jobs: Jobs::default(),
             write_locks: Mutex::default(),
         })))
     }
