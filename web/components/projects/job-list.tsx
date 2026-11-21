@@ -8,15 +8,19 @@ import {
 } from "@tanstack/react-query";
 import { ExternalLink, RotateCcw, Square, X } from "lucide-react";
 import Link from "next/link";
+import { useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { apiFetch, apiJson, errorMessage } from "@/lib/api/client";
 import { useAppEvents } from "@/lib/api/events";
 import type { JobState } from "@/lib/api/types/JobState";
 import type { JobView } from "@/lib/api/types/JobView";
 import {
+  ACTIVE_POLL_MS,
   applyEvent,
+  hasActiveJobs,
   isFinished,
   JOBS_KEY,
+  mergeFetched,
   progress,
   sortJobs,
   upsert,
@@ -47,7 +51,9 @@ export function showJob(queryClient: QueryClient, job: JobView) {
 
 /**
  * Queued, running and recently finished background jobs, kept up to date by `/api/events`
- * without reloading the page. `onProjectsChanged` runs when a job may have made a project.
+ * without reloading the page, and fetched again every few seconds while one waits or runs in
+ * case the events do not get through. `onProjectsChanged` runs when a job may have made a
+ * project.
  */
 export function JobList({
   initial,
@@ -59,9 +65,24 @@ export function JobList({
   const queryClient = useQueryClient();
   const jobs = useQuery({
     queryKey: JOBS_KEY,
-    queryFn: async () => sortJobs(await apiJson<JobView[]>("/api/jobs")),
+    queryFn: async () =>
+      mergeFetched(
+        queryClient.getQueryData<JobView[]>(JOBS_KEY) ?? [],
+        await apiJson<JobView[]>("/api/jobs"),
+      ),
     initialData: () => sortJobs(initial),
+    refetchInterval: (query) =>
+      hasActiveJobs(query.state.data) ? ACTIVE_POLL_MS : false,
   });
+  // A job that finished between two fetches may have made a project.
+  const finishedCount = jobs.data.filter(
+    (job) => job.state === "succeeded",
+  ).length;
+  const seenFinished = useRef(finishedCount);
+  useEffect(() => {
+    if (finishedCount > seenFinished.current) onProjectsChanged();
+    seenFinished.current = finishedCount;
+  }, [finishedCount, onProjectsChanged]);
 
   useAppEvents((event) => {
     if (event.type === "jobChanged" && event.job.state === "succeeded") {
@@ -116,6 +137,7 @@ function JobRow({ job }: { job: JobView }) {
 
   const finished = isFinished(job.state);
   const share = progress(job);
+  const percent = share === null ? null : Math.round(share * 100);
   const unit = job.kind === "pdfImport" ? " pages" : "";
 
   return (
@@ -169,22 +191,27 @@ function JobRow({ job }: { job: JobView }) {
         </div>
       </div>
       {!finished && (
-        <div
-          role="progressbar"
-          aria-label={`Progress of ${job.title}`}
-          aria-valuemin={0}
-          aria-valuemax={job.stepsTotal ?? undefined}
-          aria-valuenow={job.stepsTotal === null ? undefined : job.stepsDone}
-          className="h-1.5 overflow-hidden rounded-full bg-panel"
-        >
-          {share === null ? (
-            <div className="h-full w-full animate-pulse rounded-full bg-accent/40" />
-          ) : (
-            <div
-              className="h-full rounded-full bg-accent transition-[width] duration-500"
-              style={{ width: `${Math.max(share * 100, 2)}%` }}
-            />
-          )}
+        <div className="flex items-center gap-3">
+          <div
+            role="progressbar"
+            aria-label={`Progress of ${job.title}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={percent ?? undefined}
+            className="relative h-1 flex-1 overflow-hidden rounded-full bg-border"
+          >
+            {percent === null ? (
+              <div className="job-progress-indeterminate absolute inset-y-0 left-0 w-1/3 rounded-full bg-accent" />
+            ) : (
+              <div
+                className="h-full rounded-full bg-accent transition-[width] duration-700 ease-out"
+                style={{ width: `${percent}%` }}
+              />
+            )}
+          </div>
+          <span className="w-9 shrink-0 text-right text-xs text-muted tabular-nums">
+            {percent === null ? "" : `${percent}%`}
+          </span>
         </div>
       )}
       {job.message && !finished && (

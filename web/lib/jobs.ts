@@ -58,9 +58,36 @@ export function sortJobs(jobs: JobView[]): JobView[] {
   );
 }
 
-/** Progress from 0 to 1, or `null` while the number of steps is unknown. */
+/**
+ * Progress from 0 to 1, or `null` while the number of steps is unknown. A job plans, runs its
+ * steps, then finishes (for a PDF import: reads the layout, copies the pages, compiles), so
+ * planning and finishing count as one step each and the bar moves before the first page is done.
+ */
 export function progress(job: JobView): number | null {
   if (job.state === "succeeded") return 1;
-  if (job.stepsTotal === null || job.stepsTotal === 0) return null;
-  return Math.min(job.stepsDone / job.stepsTotal, 1);
+  if (job.stepsTotal === null) return job.state === "queued" ? 0 : null;
+  return Math.min((job.stepsDone + 1) / (job.stepsTotal + 2), 1);
+}
+
+/** How often the list is fetched while a job is waiting or running, besides the events. */
+export const ACTIVE_POLL_MS = 5000;
+
+export function hasActiveJobs(jobs: JobView[] | undefined): boolean {
+  return (jobs ?? []).some((job) => !isFinished(job.state));
+}
+
+/**
+ * The list just fetched, merged with the one shown: a job the page has a newer view of (an event
+ * that came while the request was on its way) keeps that view, and a waiting or running job the
+ * request missed (started meanwhile) stays. Finished jobs missing from it were dismissed.
+ */
+export function mergeFetched(shown: JobView[], fetched: JobView[]): JobView[] {
+  const byId = new Map(fetched.map((job) => [job.id, job]));
+  for (const job of shown) {
+    const other = byId.get(job.id);
+    if (other ? job.updatedAt > other.updatedAt : !isFinished(job.state)) {
+      byId.set(job.id, job);
+    }
+  }
+  return sortJobs([...byId.values()]);
 }
