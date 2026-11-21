@@ -51,8 +51,8 @@ newer release can replace the folder.
 
 **You need:** [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on macOS and
 Windows). The image holds everything, TeX Live included: about 2.7 GB to download and 9.5 GB on
-disk. It runs on amd64 and arm64 (Apple Silicon too). Images are published from the release
-after 0.1.0 on.
+disk. It runs on amd64 and arm64 (Apple Silicon too). Images are published from version 0.2.0
+on.
 
 Save [`compose.yaml`](compose.yaml) in a folder, then in that folder:
 
