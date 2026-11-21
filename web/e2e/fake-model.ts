@@ -7,7 +7,11 @@
  * 2. that file's content → read `sections/intro.tex`;
  * 3. that file's content → propose fixing the typo in it;
  * 4. the outcome of the proposal → a closing sentence.
- * Requests without tools (suggestions as you type, quick actions) get an empty answer.
+ *
+ * A PDF import sends a page image without tools: the request for the preamble gets
+ * `IMPORT_PREAMBLE`, and the request for a page gets that page's text layer back, with a picture
+ * at `FIGURE_BOX` on page 1. Other requests without tools (suggestions as you type, quick
+ * actions) get an empty answer.
  */
 
 import { createServer, type IncomingMessage, type Server } from "node:http";
@@ -24,7 +28,7 @@ interface ToolCall {
 }
 
 export interface ChatMessage {
-  role: "system" | "user" | "assistant" | "tool";
+  role: "system" | "developer" | "user" | "assistant" | "tool";
   content?: unknown;
   tool_calls?: ToolCall[];
   tool_call_id?: string;
@@ -41,8 +45,23 @@ export type Reply =
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; arguments: Record<string, unknown> };
 
+/** How the system prompts of a PDF import start (`crates/server/src/jobs/pdf_import.rs`). */
+export const PREAMBLE_PROMPT_START = "You look at the first page of a PDF";
+export const PAGE_PROMPT_START = "You turn one page of a PDF into LaTeX";
+
+/** The preamble the fake model writes for any PDF. */
+export const IMPORT_PREAMBLE = String.raw`\documentclass[a4paper,11pt]{article}
+\usepackage[margin=2.5cm]{geometry}
+\setcounter{secnumdepth}{0}
+\pagestyle{empty}`;
+
+/** Where the fake model sees a picture on page 1, as fractions of the page. */
+export const FIGURE_BOX = "box:0.1,0.1,0.5,0.4";
+
 /** What the fake model answers to `request`. */
 export function reply(request: ChatRequest): Reply {
+  const imported = importReply(request);
+  if (imported) return imported;
   if (!request.tools?.length) return { kind: "text", text: "" };
   const last = request.messages.at(-1);
   if (last?.role !== "tool") {
@@ -74,6 +93,73 @@ export function reply(request: ChatRequest): Reply {
   return { kind: "text", text: CLOSING };
 }
 
+/** The answer to a request of a PDF import, or `null` when `request` is not one. */
+export function importReply(request: ChatRequest): Reply | null {
+  const system = request.messages.find(
+    (message) => message.role === "system" || message.role === "developer",
+  );
+  const user = request.messages.findLast((message) => message.role === "user");
+  if (!system || !user || !hasImage(user.content)) return null;
+  const prompt = contentText(system.content);
+  if (prompt.startsWith(PREAMBLE_PROMPT_START)) {
+    return { kind: "text", text: IMPORT_PREAMBLE };
+  }
+  if (!prompt.startsWith(PAGE_PROMPT_START)) return null;
+  const asked = contentText(user.content);
+  const page = /Page (\d+) of the PDF\./.exec(asked)?.[1] ?? "1";
+  const layer = /<text-layer>\n([\s\S]*?)\n<\/text-layer>/.exec(asked)?.[1];
+  let body = escapeLatex(layer?.trim() || `Page ${page} of the PDF.`);
+  if (page === "1") {
+    body += `\n\n\\begin{figure}[h]\\centering\\includegraphics[width=0.4\\linewidth]{${FIGURE_BOX}}\\caption{A drawing.}\\end{figure}`;
+  }
+  return { kind: "text", text: body };
+}
+
+/** The text parts of a message's content. */
+function contentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) =>
+      part && typeof part === "object" && "text" in part
+        ? String(part.text)
+        : "",
+    )
+    .join("");
+}
+
+function hasImage(content: unknown): boolean {
+  return (
+    Array.isArray(content) &&
+    content.some(
+      (part) => part && typeof part === "object" && part.type === "image_url",
+    )
+  );
+}
+
+const LIGATURES: Record<string, string> = {
+  "\ufb00": "ff",
+  "\ufb01": "fi",
+  "\ufb02": "fl",
+  "\ufb03": "ffi",
+  "\ufb04": "ffl",
+};
+
+/** `text` as LaTeX that prints it. */
+function escapeLatex(text: string): string {
+  return text
+    .replace(/[\ufb00-\ufb04]/g, (ligature) => LIGATURES[ligature] ?? ligature)
+    .replace(/[\\{}&%$#_^~]/g, (char) =>
+      char === "\\"
+        ? "\\textbackslash{}"
+        : char === "^"
+          ? "\\textasciicircum{}"
+          : char === "~"
+            ? "\\textasciitilde{}"
+            : `\\${char}`,
+    );
+}
+
 function parseArguments(text: string): Record<string, unknown> {
   try {
     const value: unknown = JSON.parse(text);
@@ -87,18 +173,7 @@ function parseArguments(text: string): Record<string, unknown> {
 
 /** The text of a tool result sent back to the model, or "" when `message` is not one. */
 export function toolResult(message: ChatMessage): string {
-  if (message.role !== "tool") return "";
-  if (typeof message.content === "string") return message.content;
-  if (Array.isArray(message.content)) {
-    return message.content
-      .map((part) =>
-        part && typeof part === "object" && "text" in part
-          ? String(part.text)
-          : "",
-      )
-      .join("");
-  }
-  return "";
+  return message.role === "tool" ? contentText(message.content) : "";
 }
 
 /** `reply` as Chat Completions stream chunks, split the way real providers split them. */

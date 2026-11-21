@@ -137,7 +137,7 @@ async fn import(
         .unwrap_or_else(|| "Imported project".to_owned());
 
     let (report_tx, report_rx) = tokio::sync::oneshot::channel();
-    let project = projects::create_from_dir(&state, &name, move |dir| {
+    let project = projects::create_from_dir(&state, &name, "Project imported", move |dir| {
         let file = temp.reopen().map_err(ApiError::internal)?;
         let report = import_zip(std::io::BufReader::new(file), dir, ImportLimits::default())?;
         let main_file = report.main_file.clone();

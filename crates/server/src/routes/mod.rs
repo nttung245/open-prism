@@ -10,9 +10,12 @@ mod health;
 mod history;
 #[cfg(test)]
 mod history_tests;
+mod imports;
 mod jobs;
 #[cfg(test)]
 mod jobs_tests;
+#[cfg(test)]
+mod pdf_import_tests;
 mod projects;
 mod settings;
 mod synctex;
@@ -35,7 +38,8 @@ pub fn router(state: AppState) -> Router {
         .merge(synctex::routes())
         .merge(settings::routes())
         .merge(ai::routes())
-        .merge(jobs::routes());
+        .merge(jobs::routes())
+        .merge(imports::routes());
 
     Router::new()
         .nest("/api", api)

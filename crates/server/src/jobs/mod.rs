@@ -2,17 +2,15 @@
 //! own AI requests (see the `background-jobs` spec).
 
 mod gate;
+pub mod pdf_import;
 mod scheduler;
 pub mod store;
-
-#[cfg_attr(
-    not(test),
-    allow(
-        unused_imports,
-        reason = "used by kinds of jobs; the first, the PDF import, comes with add-pdf-import"
-    )
-)]
-pub use scheduler::{JobContext, JobError, JobKind, Jobs, cancel, create, delete, retry, run};
+pub use gate::AiAnswer;
+#[cfg(test)]
+pub use scheduler::create;
+pub use scheduler::{
+    JobContext, JobError, JobKind, Jobs, cancel, create_prepared, delete, retry, run,
+};
 
 use crate::db::now_ms;
 use crate::state::AppState;

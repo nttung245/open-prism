@@ -3,8 +3,12 @@ import {
   type ChatMessage,
   CLOSING,
   type FakeModel,
+  FIGURE_BOX,
   FIX,
+  IMPORT_PREAMBLE,
   MODEL,
+  PAGE_PROMPT_START,
+  PREAMBLE_PROMPT_START,
   startFakeModel,
   TYPO,
 } from "./fake-model";
@@ -129,6 +133,64 @@ describe("fake model", () => {
       false,
     );
     expect(answer).toMatchObject({ text: "", finish: "stop" });
+  });
+
+  describe("PDF import", () => {
+    const image = {
+      type: "image_url",
+      image_url: { url: "data:image/png;base64,iVBORw0KGgo=" },
+    };
+    const ask = (system: string, text: string): ChatMessage[] => [
+      { role: "system", content: `${system}. More rules.` },
+      { role: "user", content: [{ type: "text", text }, image] },
+    ];
+
+    it("writes the preamble from the first page", async () => {
+      const answer = await chat(
+        model,
+        ask(PREAMBLE_PROMPT_START, "This is page 1 of the PDF."),
+        false,
+      );
+      expect(answer).toMatchObject({ text: IMPORT_PREAMBLE, finish: "stop" });
+    });
+
+    it("copies a page from its text layer, with a picture on page 1", async () => {
+      const first = await chat(
+        model,
+        ask(
+          PAGE_PROMPT_START,
+          "The preamble:\n<preamble>\n...\n</preamble>\n\nPage 1 of the PDF.\n\n" +
+            "The PDF's text layer for this page follows.\n<text-layer>\n" +
+            "A \ufb01rst page: 50% of $5 & more_text\n</text-layer>",
+        ),
+        false,
+      );
+      expect(first.text).toContain(
+        String.raw`A first page: 50\% of \$5 \& more\_text`,
+      );
+      expect(first.text).toContain(
+        `\\includegraphics[width=0.4\\linewidth]{${FIGURE_BOX}}`,
+      );
+
+      const second = await chat(
+        model,
+        ask(PAGE_PROMPT_START, "Page 2 of the PDF."),
+        false,
+      );
+      expect(second.text).toBe("Page 2 of the PDF.");
+    });
+
+    it("leaves requests without a page image alone", async () => {
+      const answer = await chat(
+        model,
+        [
+          { role: "system", content: PAGE_PROMPT_START },
+          { role: "user", content: "Page 1 of the PDF." },
+        ],
+        false,
+      );
+      expect(answer.text).toBe("");
+    });
   });
 
   it("refuses other paths", async () => {

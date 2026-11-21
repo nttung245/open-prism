@@ -1,7 +1,14 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FilePlus2, FileUp, LoaderCircle, Pencil, Trash2 } from "lucide-react";
+import {
+  FilePlus2,
+  FileText,
+  FileUp,
+  LoaderCircle,
+  Pencil,
+  Trash2,
+} from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type SubmitEvent, useRef, useState } from "react";
@@ -9,11 +16,20 @@ import { Button, IconButton } from "@/components/ui/button";
 import { DownloadMenu } from "@/components/ui/download-menu";
 import { apiFetch, apiJson, errorMessage } from "@/lib/api/client";
 import type { ImportResponse } from "@/lib/api/types/ImportResponse";
+import type { JobView } from "@/lib/api/types/JobView";
 import type { Project } from "@/lib/api/types/Project";
+import { ImportPdfDialog } from "./import-pdf-dialog";
+import { JobList, showJob } from "./job-list";
 
 const PROJECTS_KEY = ["projects"] as const;
 
-export function ProjectList({ initial }: { initial: Project[] }) {
+export function ProjectList({
+  initial,
+  initialJobs,
+}: {
+  initial: Project[];
+  initialJobs: JobView[];
+}) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const projects = useQuery({
@@ -23,6 +39,7 @@ export function ProjectList({ initial }: { initial: Project[] }) {
   });
   const [name, setName] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
+  const [importingPdf, setImportingPdf] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const create = useMutation({
@@ -111,6 +128,14 @@ export function ProjectList({ initial }: { initial: Project[] }) {
           )}
           Import ZIP
         </Button>
+        <Button
+          disabled={busy}
+          onClick={() => setImportingPdf(true)}
+          title="Turn a PDF into a LaTeX project with the Agent model"
+        >
+          <FileText className="size-4" />
+          Import PDF
+        </Button>
         <input
           ref={fileInput}
           type="file"
@@ -131,9 +156,21 @@ export function ProjectList({ initial }: { initial: Project[] }) {
       )}
       {notice && <p className="text-sm text-warning">{notice}</p>}
 
+      <JobList
+        initial={initialJobs}
+        onProjectsChanged={() =>
+          void queryClient.invalidateQueries({ queryKey: PROJECTS_KEY })
+        }
+      />
+      <ImportPdfDialog
+        open={importingPdf}
+        onClose={() => setImportingPdf(false)}
+        onStarted={(job) => showJob(queryClient, job)}
+      />
+
       {projects.data.length === 0 ? (
         <p className="rounded-lg border border-dashed border-border p-8 text-center text-sm text-muted">
-          No projects yet. Create one or import a ZIP archive.
+          No projects yet. Create one, or import a ZIP archive or a PDF.
         </p>
       ) : (
         <ul className="divide-y divide-border rounded-lg border border-border">

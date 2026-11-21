@@ -1,0 +1,17 @@
+% Source of ../two-pages.pdf, the PDF the end-to-end test imports. See ../README.md.
+\documentclass[a4paper,11pt]{article}
+\input{glyphtounicode}
+\pdfgentounicode=1
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{xcolor}
+\pagestyle{empty}
+\begin{document}
+\section*{A two-page test document}
+Open Prism turns this page into LaTeX. The grey box below stands in for a drawing.
+
+\bigskip
+\noindent\textcolor{gray}{\rule{6cm}{4cm}}
+
+\newpage
+The second page of the test document ends here.
+\end{document}

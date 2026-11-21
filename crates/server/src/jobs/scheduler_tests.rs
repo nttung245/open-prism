@@ -38,6 +38,8 @@ pub(crate) struct FakeKind {
     pub(crate) concurrency: usize,
     /// CPU-bound work in every step, on the jobs' shared threads.
     pub(crate) cpu_work: Duration,
+    /// A file `plan` needs in the job's directory, as an imported PDF.
+    pub(crate) needs_file: Option<&'static str>,
     pub(crate) delay: Duration,
     pub(crate) behaviour: HashMap<u32, Behaviour>,
     pub(crate) calls: Mutex<HashMap<u32, u32>>,
@@ -73,6 +75,11 @@ impl JobKind for FakeKind {
     fn plan<'a>(&'a self, job: &'a JobContext) -> BoxFuture<'a, Result<u32, JobError>> {
         self.plans.fetch_add(1, Ordering::SeqCst);
         async move {
+            if let Some(file) = self.needs_file
+                && !job.dir.join(file).is_file()
+            {
+                return Err(JobError::Fatal(format!("{file} is missing")));
+            }
             job.set_message("Planning").await;
             Ok(self.steps)
         }
@@ -574,4 +581,52 @@ async fn the_message_shows_and_cpu_work_shares_two_threads() {
         None,
         "cleared when it ends"
     );
+}
+
+#[tokio::test]
+async fn a_prepared_job_runs_only_once_its_files_are_there() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = open(dir.path()).await;
+    state.jobs.register(Arc::new(FakeKind {
+        needs_file: Some("source.pdf"),
+        ..FakeKind::new(2, 1, Duration::ZERO)
+    }));
+    let (_stop, _task) = start(&state);
+
+    let woken = state.clone();
+    let job = super::create_prepared(&state, "fake", "slow input", &json!({}), move |dir| {
+        // Wake the scheduler in the middle of a slow copy: it looks at the queue now, and must
+        // not see the job before its file is there.
+        woken.jobs.wake.notify_one();
+        std::thread::sleep(Duration::from_millis(300));
+        std::fs::write(dir.join("source.pdf"), b"%PDF-1.5").unwrap();
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let done = finished(&state, &job.id).await;
+    assert_eq!(done.state, JobState::Succeeded, "{done:?}");
+}
+
+#[tokio::test]
+async fn a_failed_preparation_leaves_no_job_and_no_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = open(dir.path()).await;
+    state
+        .jobs
+        .register(Arc::new(FakeKind::new(1, 1, Duration::ZERO)));
+    let err = super::create_prepared(&state, "fake", "broken", &json!({}), |dir| {
+        std::fs::write(dir.join("half.pdf"), b"%PDF").unwrap();
+        Err(crate::error::ApiError::bad_request("not a PDF"))
+    })
+    .await
+    .unwrap_err();
+    assert_eq!(status(err), axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        store::list(&state.db, crate::db::now_ms())
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(std::fs::read_dir(&state.paths.jobs).unwrap().count(), 0);
 }

@@ -11,6 +11,7 @@ pub mod history;
 pub mod latexlog;
 pub mod paths;
 pub mod pdf_pages;
+pub mod pdf_render;
 pub mod synctex;
 #[cfg(all(test, unix))]
 mod test_support;

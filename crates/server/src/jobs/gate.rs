@@ -1,13 +1,6 @@
 //! The gate background jobs' AI requests go through: a few requests at once per provider, and a
 //! pause for every background request to a provider that rate limits. Interactive requests (chat,
 //! suggestions, quick actions) call the model directly and never wait here.
-#![cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "used by kinds of jobs; the first, the PDF import, comes with add-pdf-import"
-    )
-)]
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};

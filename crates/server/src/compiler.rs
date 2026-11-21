@@ -152,6 +152,32 @@ impl Compiler {
     }
 }
 
+/// Compiles `root` once, outside any project (for example a PDF being imported): the same
+/// toolchain choice, log parsing and diagnostics as a project's compilation. `work` holds the
+/// build and run directories.
+pub async fn compile_dir(
+    state: &AppState,
+    root: &Path,
+    main_file: &str,
+    work: &Path,
+    cancel: &CancellationToken,
+) -> Result<CompileResult, ApiError> {
+    let run_id = Uuid::now_v7().to_string();
+    let job = CompileJob {
+        project_root: root.to_path_buf(),
+        main_file: RelPath::parse(main_file)?,
+        engine: compile::ProjectEngine::Auto,
+        build_dir: work.join("build"),
+        run_dir: work.join("run"),
+        tex_cache_dir: state.paths.tex_cache.clone(),
+        container_name: format!("openprism-compile-{run_id}"),
+        timeout: COMPILE_TIMEOUT,
+    };
+    let started_at = now_ms();
+    let outcome = compile::compile(&job, &state.compiler.engines, cancel).await;
+    Ok(to_result(&run_id, started_at, &job, outcome))
+}
+
 fn cancelled_result(run_id: &str, started_at: i64) -> CompileResult {
     CompileResult {
         run_id: run_id.to_owned(),
