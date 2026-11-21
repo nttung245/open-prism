@@ -53,6 +53,21 @@ package: build
     scripts/package-release.sh "$version" "$arch"
     scripts/smoke-release.sh "target/dist/open-prism-$version-linux-$arch.tar.gz"
 
+# Docker image for this machine (open-prism:<version>) from the release package, as the release workflow builds it, then run it once
+image: package
+    #!/usr/bin/env bash
+    set -euo pipefail
+    case "$(uname -m)" in x86_64) arch=x64 ;; aarch64) arch=arm64 ;; *) echo "no image for $(uname -m)" >&2; exit 1 ;; esac
+    id=$(cargo pkgid -p openprism-server)
+    version=${id##*[@#]}
+    package=open-prism-$version-linux-$arch.tar.gz
+    # The build context holds only the package.
+    rm -rf target/docker-context && mkdir -p target/docker-context
+    cp "target/dist/$package" target/docker-context/
+    docker build -f Dockerfile --build-arg "PACKAGE=$package" --build-arg "VERSION=$version" \
+      -t "open-prism:$version" target/docker-context
+    scripts/smoke-image.sh "open-prism:$version"
+
 # Print the access token
 token:
     @cargo run -q -p openprism-server -- print-token
