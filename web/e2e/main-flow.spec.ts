@@ -152,7 +152,9 @@ test("import, edit, compile, and accept an edit from the assistant", async ({
   let projectId = "";
   await test.step("import a ZIP", async () => {
     await page.getByRole("link", { name: "All projects" }).click();
-    await page.locator('input[type="file"]').setInputFiles(PAPER_ZIP);
+    await page
+      .locator('input[type="file"][accept*="zip"]')
+      .setInputFiles(PAPER_ZIP);
     await page.waitForURL(/\/project\/[^/]+$/);
     projectId = new URL(page.url()).pathname.split("/").at(-1) ?? "";
     await expect(page.getByText("main: main.tex")).toBeVisible();
