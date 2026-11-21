@@ -70,6 +70,12 @@ export function ImportPdfDialog({
     } else if (!open && element.open) {
       element.close();
     }
+    // Next.js keeps a page it leaves mounted but hidden, and runs this cleanup then. A modal
+    // dialog left open there would block every click on the next page (its "Open Settings"
+    // link leads there), so it closes.
+    return () => {
+      if (element.open) element.close();
+    };
   }, [open, reset]);
 
   const onSubmit = (event: SubmitEvent<HTMLFormElement>) => {

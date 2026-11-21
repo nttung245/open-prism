@@ -48,6 +48,35 @@ test("import a PDF as a new project", async ({ page }) => {
     }
   });
 
+  await test.step("sign in with the link", async () => {
+    await page.goto(`/login?token=${ACCESS_TOKEN}`);
+    await expect(
+      page.getByRole("heading", { name: "Open Prism" }),
+    ).toBeVisible();
+  });
+
+  await test.step("without an Agent model, the dialog links to a working Settings page", async () => {
+    expect(
+      (await api.put("settings/roles", { data: { agent: null } })).ok(),
+    ).toBe(true);
+    await page.getByRole("button", { name: "Import PDF" }).click();
+    const dialog = page.getByRole("dialog", { name: "Import PDF" });
+    await dialog.getByLabel("PDF file").setInputFiles(PDF);
+    await dialog.getByRole("button", { name: "Import", exact: true }).click();
+    await expect(dialog.getByRole("alert")).toContainText(
+      "choose a model for Agent in Settings first",
+    );
+    await dialog.getByRole("link", { name: "Open Settings" }).click();
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    // The dialog closed on the way: a modal one left open on the hidden page would block the
+    // whole Settings page.
+    const name = page.getByLabel("Name", { exact: true });
+    await name.fill("Typed on the Settings page");
+    await expect(name).toHaveValue("Typed on the Settings page");
+    await page.getByRole("link", { name: "All projects" }).click();
+    await expect(page.getByRole("dialog", { name: "Import PDF" })).toBeHidden();
+  });
+
   await test.step("choose the fake model for Agent", async () => {
     const providers = (await (await api.get("settings/providers")).json()) as {
       id: string;
@@ -71,13 +100,6 @@ test("import a PDF as a new project", async ({ page }) => {
       data: { agent: { providerId, model: MODEL } },
     });
     expect(roles.ok()).toBe(true);
-  });
-
-  await test.step("sign in with the link", async () => {
-    await page.goto(`/login?token=${ACCESS_TOKEN}`);
-    await expect(
-      page.getByRole("heading", { name: "Open Prism" }),
-    ).toBeVisible();
   });
 
   const row = page
