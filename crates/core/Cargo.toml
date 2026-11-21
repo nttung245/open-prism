@@ -24,6 +24,7 @@ which.workspace = true
 zip.workspace = true
 sevenz-rust2.workspace = true
 lopdf.workspace = true
+hayro.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
