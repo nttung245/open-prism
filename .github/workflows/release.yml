@@ -1,8 +1,10 @@
 name: Release
 
-# A tag v<version> builds, packages and tests Open Prism for Linux x64 and arm64, then makes a
-# draft GitHub release with the packages, SHA256SUMS and build provenance; a person publishes it.
-# Run by hand, or on a pull request that changes the packaging, it stops before the release.
+# A tag v<version> builds, packages and tests Open Prism for Linux x64 and arm64, builds and
+# tests a Docker image from each package, then pushes ghcr.io/nttung245/open-prism:<version> and
+# makes a draft GitHub release with the packages, SHA256SUMS and build provenance; a person
+# publishes it, and only then does the image's `latest` tag move to it.
+# Run by hand, or on a pull request that changes the packaging, it stops before pushing anything.
 
 on:
   push:
@@ -14,6 +16,11 @@ on:
       - packaging/**
       - scripts/package-release.sh
       - scripts/smoke-release.sh
+      - scripts/smoke-image.sh
+      - Dockerfile
+      - compose.yaml
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -25,14 +32,18 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   NEXT_TELEMETRY_DISABLED: 1
+  IMAGE: ghcr.io/nttung245/open-prism
 
 jobs:
   package:
     name: Package (linux-${{ matrix.arch }})
     # Built on Ubuntu 22.04 so the packages need only glibc 2.35. No caches: the packages are
     # built from the tagged source alone.
+    if: github.event_name != 'release'
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
@@ -97,16 +108,72 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  image:
+    name: Image (linux/${{ matrix.platform }})
+    # The image is the package that has just passed, on TeX Live; built and run on the
+    # platform it is for. Pushed (as <version>-<platform>) only for a tag.
+    needs: package
+    if: github.event_name != 'release'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            platform: amd64
+            runner: ubuntu-22.04
+          - arch: arm64
+            platform: arm64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The build context: a folder holding only the package.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: open-prism-linux-${{ matrix.arch }}
+          path: target/docker-context
+      - name: Build the image
+        env:
+          VERSION: ${{ needs.package.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          df -h /
+          docker build -f Dockerfile --build-arg "PACKAGE=open-prism-$VERSION-linux-$ARCH.tar.gz" \
+            --build-arg "VERSION=$VERSION" -t "open-prism:$VERSION" target/docker-context
+          docker image ls open-prism
+          df -h /
+      - name: Run the image
+        env:
+          VERSION: ${{ needs.package.outputs.version }}
+        run: scripts/smoke-image.sh "open-prism:$VERSION"
+      - name: Push <version>-<platform>
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker tag "open-prism:$VERSION" "$IMAGE:$VERSION-$PLATFORM"
+          docker push "$IMAGE:$VERSION-$PLATFORM"
+
   release:
     name: Draft release
-    needs: package
-    if: github.ref_type == 'tag'
+    needs: [package, image]
+    if: github.ref_type == 'tag' && github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: write
       id-token: write
       attestations: write
+      packages: write
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -121,6 +188,22 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*.tar.gz
+      - name: Image <version> for both platforms
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+        run: |
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker buildx imagetools create -t "$IMAGE:$VERSION" "$IMAGE:$VERSION-amd64" "$IMAGE:$VERSION-arm64"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"
+          digest=$(docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' | jq -r .digest)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
       - name: Draft release (published by a person, after a look)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -128,3 +211,26 @@ jobs:
         run: |
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
             --title "Open Prism ${TAG#v}" --generate-notes dist/*.tar.gz dist/SHA256SUMS
+
+  latest:
+    name: Move the image's latest tag
+    # A person published the release: from now on `latest` is this version.
+    if: github.event_name == 'release' && !github.event.release.prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      packages: write
+    steps:
+      - name: latest → <version>
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=${TAG#v}
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if ! docker buildx imagetools inspect "$IMAGE:$version" > /dev/null 2>&1; then
+            echo "::notice::There is no image $IMAGE:$version (released before the Docker image existed): latest is unchanged"
+            exit 0
+          fi
+          docker buildx imagetools create -t "$IMAGE:latest" "$IMAGE:$version"
+          docker buildx imagetools inspect "$IMAGE:latest"
