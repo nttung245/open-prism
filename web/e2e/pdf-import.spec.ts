@@ -36,6 +36,32 @@ test.afterAll(async () => {
   await model?.close();
 });
 
+/** Makes the fake model the Agent's model, adding it as a provider when needed. */
+async function chooseFakeAgent() {
+  const providers = (await (await api.get("settings/providers")).json()) as {
+    id: string;
+    name: string;
+  }[];
+  let providerId = providers.find(
+    (provider) => provider.name === "Fake model",
+  )?.id;
+  if (!providerId) {
+    const created = await api.post("settings/providers", {
+      data: {
+        name: "Fake model",
+        kind: "openai-compatible",
+        baseUrl: model.url,
+      },
+    });
+    expect(created.status()).toBe(201);
+    providerId = ((await created.json()) as { id: string }).id;
+  }
+  const roles = await api.put("settings/roles", {
+    data: { agent: { providerId, model: MODEL } },
+  });
+  expect(roles.ok()).toBe(true);
+}
+
 test("import a PDF as a new project", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
@@ -77,30 +103,7 @@ test("import a PDF as a new project", async ({ page }) => {
     await expect(page.getByRole("dialog", { name: "Import PDF" })).toBeHidden();
   });
 
-  await test.step("choose the fake model for Agent", async () => {
-    const providers = (await (await api.get("settings/providers")).json()) as {
-      id: string;
-      name: string;
-    }[];
-    let providerId = providers.find(
-      (provider) => provider.name === "Fake model",
-    )?.id;
-    if (!providerId) {
-      const created = await api.post("settings/providers", {
-        data: {
-          name: "Fake model",
-          kind: "openai-compatible",
-          baseUrl: model.url,
-        },
-      });
-      expect(created.status()).toBe(201);
-      providerId = ((await created.json()) as { id: string }).id;
-    }
-    const roles = await api.put("settings/roles", {
-      data: { agent: { providerId, model: MODEL } },
-    });
-    expect(roles.ok()).toBe(true);
-  });
+  await test.step("choose the fake model for Agent", chooseFakeAgent);
 
   const row = page
     .getByRole("region", { name: "Background jobs" })
@@ -176,4 +179,35 @@ test("import a PDF as a new project", async ({ page }) => {
   expect(pages.every((text) => text.includes("image_url"))).toBe(true);
 
   expect(errors).toEqual([]);
+});
+
+test("the job list follows an import when the event stream is down", async ({
+  page,
+}) => {
+  // Every connection to the event stream fails, as through a proxy while the API restarts.
+  await page.route("**/api/events", (route) =>
+    route.fulfill({ status: 502, body: "Bad Gateway" }),
+  );
+  await chooseFakeAgent();
+  await page.goto(`/login?token=${ACCESS_TOKEN}`);
+  await expect(page.getByRole("heading", { name: "Open Prism" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Import PDF" }).click();
+  const dialog = page.getByRole("dialog", { name: "Import PDF" });
+  await dialog.getByLabel("PDF file").setInputFiles(PDF);
+  await dialog.getByLabel("Project name").fill("polled");
+  await dialog.getByRole("button", { name: "Import", exact: true }).click();
+  await expect(dialog).toBeHidden();
+
+  // Fetched again every few seconds while it runs: it gets to Done without a reload.
+  const row = page
+    .getByRole("region", { name: "Background jobs" })
+    .getByRole("listitem")
+    .first();
+  await expect(row).toContainText("Import two-pages.pdf");
+  await expect(row.getByText("Done")).toBeVisible({ timeout: 60_000 });
+  await expect(row.getByRole("link", { name: "Open project" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: /^polled main\.tex/ }),
+  ).toBeVisible();
 });

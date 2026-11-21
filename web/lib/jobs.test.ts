@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { JobView } from "./api/types/JobView";
-import { applyEvent, isFinished, progress, sortJobs, upsert } from "./jobs";
+import {
+  applyEvent,
+  hasActiveJobs,
+  isFinished,
+  mergeFetched,
+  progress,
+  sortJobs,
+  upsert,
+} from "./jobs";
 
 function job(id: string, patch: Partial<JobView> = {}): JobView {
   return {
@@ -98,11 +106,49 @@ describe("jobs", () => {
     expect(isFinished("running")).toBe(false);
     expect(isFinished("queued")).toBe(false);
     expect(isFinished("cancelled")).toBe(true);
-    expect(progress(job("a"))).toBeNull();
-    expect(progress(job("a", { stepsDone: 1, stepsTotal: 4 }))).toBe(0.25);
-    expect(progress(job("a", { stepsTotal: 0 }))).toBeNull();
+    // Planning: steps unknown.
+    expect(progress(job("a", { state: "running" }))).toBeNull();
+    expect(progress(job("a"))).toBe(0);
+    // Planned 2 pages: planning counts as done, compiling as one step left.
+    expect(progress(job("a", { state: "running", stepsTotal: 2 }))).toBe(0.25);
+    expect(
+      progress(job("a", { state: "running", stepsDone: 1, stepsTotal: 2 })),
+    ).toBe(0.5);
+    expect(
+      progress(job("a", { state: "running", stepsDone: 2, stepsTotal: 2 })),
+    ).toBe(0.75);
     expect(progress(job("a", { state: "succeeded", stepsTotal: null }))).toBe(
       1,
     );
+  });
+
+  it("polls only while a job waits or runs", () => {
+    expect(hasActiveJobs(undefined)).toBe(false);
+    expect(hasActiveJobs([job("a", { state: "succeeded" })])).toBe(false);
+    expect(
+      hasActiveJobs([
+        job("a", { state: "failed" }),
+        job("b", { state: "running" }),
+      ]),
+    ).toBe(true);
+    expect(hasActiveJobs([job("a")])).toBe(true);
+  });
+
+  it("merges a fetched list without losing newer views", () => {
+    const shown = [
+      job("newer", { state: "running", stepsDone: 2, updatedAt: 5000 }),
+      job("older", { state: "running", stepsDone: 1, updatedAt: 1000 }),
+      job("started", { state: "queued", createdAt: 4000, updatedAt: 4000 }),
+      job("dismissed", { state: "succeeded", finishedAt: 3000 }),
+    ];
+    const fetched = [
+      job("newer", { state: "running", stepsDone: 1, updatedAt: 4000 }),
+      job("older", { state: "succeeded", finishedAt: 6000, updatedAt: 6000 }),
+      job("other", { state: "failed", finishedAt: 2000, updatedAt: 2000 }),
+    ];
+    const merged = mergeFetched(shown, fetched);
+    expect(ids(merged)).toEqual(["newer", "started", "older", "other"]);
+    expect(merged[0].stepsDone).toBe(2);
+    expect(merged[2].state).toBe("succeeded");
   });
 });

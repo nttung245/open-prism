@@ -79,3 +79,25 @@ body {
 .synctex-highlight {
   animation: synctex-flash 3s ease-out forwards;
 }
+
+/* The moving part of a job's progress line while its number of steps is not known yet */
+@keyframes job-progress-slide {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+
+.job-progress-indeterminate {
+  animation: job-progress-slide 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .job-progress-indeterminate {
+    animation: none;
+    width: 100%;
+    opacity: 0.4;
+  }
+}

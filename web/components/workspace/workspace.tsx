@@ -50,6 +50,7 @@ import {
   fileUrl,
 } from "@/lib/api/client";
 import { streamSuggestion } from "@/lib/api/completion";
+import { openEventStream } from "@/lib/api/event-stream";
 import type { CompileResult } from "@/lib/api/types/CompileResult";
 import type { CompileStarted } from "@/lib/api/types/CompileStarted";
 import type { Diagnostic } from "@/lib/api/types/Diagnostic";
@@ -615,25 +616,27 @@ export default function Workspace({
         break;
     }
   };
-  useEffect(() => {
-    const source = new EventSource(`/api/projects/${id}/events`);
-    let reconnecting = false;
-    source.onmessage = (message) => {
-      try {
-        onEvent.current(JSON.parse(message.data) as ProjectEvent);
-      } catch {
-        // Ignore malformed events.
-      }
-    };
-    source.onerror = () => {
-      reconnecting = true;
-    };
-    source.onopen = () => {
-      if (reconnecting) onEvent.current({ type: "resync" });
-      reconnecting = false;
-    };
-    return () => source.close();
-  }, [id]);
+  // Whether the stream of this project opened before: a later opening (after a dropped
+  // connection, or when this page is shown again) may have missed events. It outlives the
+  // effect, which Next.js cleans up while the page is hidden.
+  const eventsOpened = useRef<string | null>(null);
+  useEffect(
+    () =>
+      openEventStream(`/api/projects/${id}/events`, {
+        onMessage: (data) => {
+          try {
+            onEvent.current(JSON.parse(data) as ProjectEvent);
+          } catch {
+            // Ignore malformed events.
+          }
+        },
+        onOpen: () => {
+          if (eventsOpened.current === id) onEvent.current({ type: "resync" });
+          eventsOpened.current = id;
+        },
+      }),
+    [id],
+  );
 
   // Global shortcuts (also when the editor is not focused) and unsaved-changes guard.
   useEffect(() => {
