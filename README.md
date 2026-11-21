@@ -322,9 +322,10 @@ Everything is in one folder: `~/.local/share/open-prism` on Linux, the platform'
 folder elsewhere, `/data` in the Docker image (the `open-prism-data` volume), or the folder
 given with `--data-dir` (`OPENPRISM_DATA_DIR`). It holds
 `projects/` (one plain folder per project), `history/`, `attachments/`, the database
-`open-prism.db` (settings, provider keys, conversations), `access-token`, and compile output
-and caches (`build/`, `runs/`, `cache/`, `tmp/`) that a backup can skip. To back up, stop
-Open Prism and copy the folder.
+`open-prism.db` (settings, provider keys, conversations, background jobs), `access-token`,
+`jobs/` (working files of background jobs; a backup can skip it when no job is unfinished), and
+compile output and caches (`build/`, `runs/`, `cache/`, `tmp/`) that a backup can skip. To back
+up, stop Open Prism and copy the folder.
 
 ## Configuration
 
@@ -397,6 +398,13 @@ browser ──► Next.js server (Node 22, :3737) ──/api/*──► open-pri
 
 The API only listens on `127.0.0.1`. The Next.js server is the single entry point and forwards
 `/api/*` through a streaming route handler (`web/app/api/[...path]/route.ts`).
+
+Long work runs as **background jobs** (`crates/server/src/jobs`), in steps whose state is kept
+in the database, with working files in `jobs/<id>/` outside the projects. One job runs at a
+time; a job cut short by stopping Open Prism resumes at the next start without redoing finished
+steps. Its AI requests go through a gate that allows three at a time per provider and waits out
+rate limits, so chat and suggestions never queue behind a job. `GET /api/jobs` lists jobs and
+`GET /api/events` streams their progress to every open page.
 
 ## Development
 
@@ -472,7 +480,9 @@ for your machine.
       "fix compile errors", fallback for models without tool calling
 - [x] **M3 Writing help**: version history, suggestions as you type, capture and ask
       about the PDF, images in the chat, image and handwriting to LaTeX
-- [ ] **M4 Release**: one-command run, user docs and prebuilt Linux packages (done), Docker image
+- [x] **M4 Release**: one-command run, user docs, prebuilt Linux packages, Docker image
+- [ ] **Next**: import a PDF (scanned too) as a LaTeX project, the assistant reading each page;
+      background jobs for it (done)
 
 ## License
 

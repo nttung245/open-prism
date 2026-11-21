@@ -165,6 +165,53 @@ fn summarise(body: &str) -> String {
     }
 }
 
+/// Shortest and longest wait a rate-limited provider's hint can ask for.
+const HINT_RANGE: (std::time::Duration, std::time::Duration) = (
+    std::time::Duration::from_secs(1),
+    std::time::Duration::from_secs(300),
+);
+
+/// How long a rate-limited provider asks to wait, when its message says so: "retry in 20s",
+/// "try again in 1.5 seconds", `"retryDelay": "20s"` (Gemini), or `Retry-After: 20` copied into
+/// the body. Kept between 1 second and 5 minutes; `None` when the message gives no time.
+pub fn retry_hint(detail: &str) -> Option<std::time::Duration> {
+    let lower = detail.to_ascii_lowercase();
+    [
+        "retrydelay",
+        "retry-after",
+        "retry after",
+        "retry in",
+        "try again in",
+    ]
+    .iter()
+    .find_map(|key| {
+        let start = lower.find(key)? + key.len();
+        // The number follows within a few characters (`": "`, `: `, ` `).
+        let rest = &lower[start..];
+        let digits_at = rest
+            .char_indices()
+            .take(6)
+            .find(|(_, c)| c.is_ascii_digit())?
+            .0;
+        let rest = &rest[digits_at..];
+        let number_len = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.'))
+            .unwrap_or(rest.len());
+        let value: f64 = rest[..number_len].parse().ok()?;
+        let unit = rest[number_len..].trim_start();
+        let seconds = if unit.starts_with("ms") || unit.starts_with("milli") {
+            value / 1000.0
+        } else if unit.starts_with('h') {
+            value * 3600.0
+        } else if unit.starts_with("min") || (unit.starts_with('m') && !unit.starts_with("ms")) {
+            value * 60.0
+        } else {
+            value
+        };
+        Some(std::time::Duration::from_secs_f64(seconds).clamp(HINT_RANGE.0, HINT_RANGE.1))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +266,37 @@ mod tests {
             panic!("unexpected classification");
         };
         assert!(message.len() < 700);
+    }
+
+    #[test]
+    fn reads_how_long_a_provider_asks_to_wait() {
+        use std::time::Duration;
+        let cases = [
+            (
+                "Rate limit reached. Please retry in 20s.",
+                Some(Duration::from_secs(20)),
+            ),
+            (
+                "Please try again in 1.5 seconds",
+                Some(Duration::from_millis(1500)),
+            ),
+            (
+                r#"{"error":{"details":[{"retryDelay": "37s"}]}}"#,
+                Some(Duration::from_secs(37)),
+            ),
+            ("Retry-After: 12", Some(Duration::from_secs(12))),
+            (
+                "please retry after 2 minutes",
+                Some(Duration::from_secs(120)),
+            ),
+            ("retry in 250ms", Some(Duration::from_secs(1))),
+            ("try again in 3 hours", Some(Duration::from_secs(300))),
+            ("You exceeded your current quota", None),
+            ("retry in a moment", None),
+            ("", None),
+        ];
+        for (detail, expected) in cases {
+            assert_eq!(retry_hint(detail), expected, "{detail:?}");
+        }
     }
 }
