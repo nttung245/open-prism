@@ -129,8 +129,26 @@ Something not working? See [Troubleshooting](#troubleshooting).
 
 ## What works today
 
-- Projects: create, rename, delete; import a ZIP (Prism, Overleaf, arXiv); download one as ZIP
-  or 7z.
+- Projects: create, rename, delete; import a ZIP (Prism, Overleaf, arXiv) or a PDF; download
+  one as ZIP or 7z.
+- Import a PDF as a LaTeX project: **Import PDF** on the project list takes the file, a name
+  (the file name by default) and the pages (empty for all of them, or a list such as
+  `1-5, 8`, up to 300 pages and 200 MB). The Agent model reads each page as an image, with
+  the PDF's text layer when there is one (scans work too). It writes a preamble from the
+  first page so the result looks like the original: paper size, margins, a close font,
+  heading style, lists. Pictures are cut out of the page into `figures/`. The pages are put
+  together and compiled, and the Agent fixes compile errors (up to two rounds); the result
+  is a new project with a first version in its history. Citations stay as printed text, never
+  `\cite`: references are yours to add.
+
+  The import runs in the background. A list above your projects shows each job with its
+  pages done, live: keep working in other projects meanwhile, **Cancel** it, **Retry** a
+  failed one (pages already copied are kept, so fix the key in Settings and retry), then
+  **Open project**. It keeps going if you close the page, and after a restart.
+
+  With DeepSeek v4.1 Flash through OpenCode Go, a 3-page paper took 30–60 seconds. Each page
+  is one request of about 2–4k input tokens (mostly the image) and 0.2–1.5k output tokens,
+  plus one request for the preamble. The Agent's model has to read images.
 - Editor: file tree, tabs, LaTeX highlighting, autosave. A file changed by another program
   reloads by itself; if you had unsaved edits too, you choose which version to keep.
 - Compilation with latexmk (pdfLaTeX, XeLaTeX, LuaLaTeX, chosen automatically or per
@@ -239,14 +257,17 @@ Links checked on 2026-11-20.
   a model refuses the chosen level, the request is sent once more: with the nearest level
   the provider lists as supported (OpenAI's `gpt-5.5` tops out at "xhigh", for example), or
   with no level. That costs one extra round trip per request, so pick a level the model has.
-- **Images** (PDF captures, images in the chat, Image to LaTeX) need a model that reads
-  images. One that cannot shows the provider's error.
+- **Images** (PDF captures, images in the chat, Image to LaTeX, PDF import) need a model that
+  reads images. One that cannot shows the provider's error.
+- **PDF import** uses the Agent's model, with reasoning off while it copies pages: thinking
+  spends the output tokens a page needs.
 
 ### What is sent, and where keys are kept
 
 The provider receives what each feature needs: your messages with their images, the files
 and compile log the assistant reads with its tools, the selected text for quick actions, and
-the text around the cursor for suggestions. Keys are stored in the database in the data dir
+the text around the cursor for suggestions. A PDF import sends each page as an image with
+its text layer, and the compile errors of the result with its preamble. Keys are stored in the database in the data dir
 (`open-prism.db`, see [Troubleshooting](#where-is-my-data)) and are never sent back to the
 browser.
 
@@ -481,8 +502,8 @@ for your machine.
 - [x] **M3 Writing help**: version history, suggestions as you type, capture and ask
       about the PDF, images in the chat, image and handwriting to LaTeX
 - [x] **M4 Release**: one-command run, user docs, prebuilt Linux packages, Docker image
-- [ ] **Next**: import a PDF (scanned too) as a LaTeX project, the assistant reading each page;
-      background jobs for it (done)
+- [x] **PDF import**: background jobs, and importing a PDF (scanned too) as a LaTeX project,
+      the Agent reading each page
 
 ## License
 
