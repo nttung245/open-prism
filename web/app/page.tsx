@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { ProjectList } from "@/components/projects/project-list";
 import { apiGet } from "@/lib/api/server";
+import type { JobView } from "@/lib/api/types/JobView";
 import type { Project } from "@/lib/api/types/Project";
 import { ApiStatus } from "./api-status";
 
@@ -38,6 +39,9 @@ export default function Home() {
 }
 
 async function Projects() {
-  const projects = await apiGet<Project[]>("/api/projects");
-  return <ProjectList initial={projects} />;
+  const [projects, jobs] = await Promise.all([
+    apiGet<Project[]>("/api/projects"),
+    apiGet<JobView[]>("/api/jobs"),
+  ]);
+  return <ProjectList initial={projects} initialJobs={jobs} />;
 }
