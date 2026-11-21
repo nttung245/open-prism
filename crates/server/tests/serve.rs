@@ -21,8 +21,9 @@ use tokio::sync::{Mutex, mpsc};
 /// The tests start real servers on real ports: one at a time.
 static SERIAL: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
-/// Answers `--version` like Node 22; otherwise serves `/api/health` like Open Prism on `$PORT`
-/// and writes its process id to `$FAKE_WEB_PID`.
+/// Answers `--version` like Node 22; otherwise serves `/api/health` like Open Prism on
+/// `$HOSTNAME`:`$PORT`, and writes its process id to `$FAKE_WEB_PID` and the address it was
+/// given to `$FAKE_WEB_HOST`.
 const FAKE_NODE: &str = r#"#!/bin/sh
 if [ "$1" = "--version" ]; then echo v22.0.0; exit 0; fi
 exec python3 -c '
@@ -42,7 +43,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         pass
 with open(os.environ["FAKE_WEB_PID"], "w") as f:
     f.write(str(os.getpid()))
-http.server.HTTPServer(("127.0.0.1", int(os.environ["PORT"])), Handler).serve_forever()
+with open(os.environ["FAKE_WEB_HOST"], "w") as f:
+    f.write(os.environ["HOSTNAME"])
+http.server.HTTPServer((os.environ["HOSTNAME"], int(os.environ["PORT"])), Handler).serve_forever()
 '
 "#;
 
@@ -82,6 +85,10 @@ impl Setup {
             .unwrap_or_default()
     }
 
+    fn web_host(&self) -> String {
+        std::fs::read_to_string(self.path("web.host")).unwrap()
+    }
+
     fn web_pid(&self) -> i32 {
         std::fs::read_to_string(self.path("web.pid"))
             .unwrap()
@@ -112,9 +119,13 @@ impl Setup {
             .env("BROWSER", &self.browser)
             .env("BROWSER_LOG", self.path("opened"))
             .env("FAKE_WEB_PID", self.path("web.pid"))
+            .env("FAKE_WEB_HOST", self.path("web.host"))
+            // What a shell or a container may have set: never used as is.
+            .env("HOSTNAME", "from-the-shell")
             .env("RUST_LOG", "info")
             .env_remove("OPENPRISM_ACCESS_TOKEN")
             .env_remove("OPENPRISM_OPEN")
+            .env_remove("OPENPRISM_WEB_HOST")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -358,6 +369,49 @@ async fn closing_the_terminal_stops_the_app_and_the_web_app() {
     assert!(
         eventually(|| !is_running(web)).await,
         "the web app is still running"
+    );
+    assert!(is_free(ports.0) && is_free(ports.1));
+}
+
+#[tokio::test]
+async fn the_web_app_listens_on_loopback_unless_told_every_address() {
+    let _serial = SERIAL.lock().await;
+    let setup = Setup::new();
+
+    let ports = free_ports();
+    let mut app = setup.start(ports, &[]);
+    app.wait_for("Open Prism is running").await;
+    assert_eq!(setup.web_host(), "127.0.0.1");
+    assert!(
+        !app.output().contains("listens on 0.0.0.0"),
+        "{}",
+        app.output()
+    );
+    assert!(app.stop(Signal::SIGTERM).await.success());
+
+    let ports = free_ports();
+    let mut app = setup.start(ports, &["--web-host", "0.0.0.0"]);
+    app.wait_for("Open Prism is running").await;
+    app.wait_for(&format!("http://127.0.0.1:{}/login?token=", ports.1))
+        .await;
+    assert_eq!(setup.web_host(), "0.0.0.0");
+    assert!(
+        app.output()
+            .contains(&format!("the web app listens on 0.0.0.0:{}", ports.1)),
+        "{}",
+        app.output()
+    );
+    assert!(app.stop(Signal::SIGTERM).await.success());
+
+    // Any other address is refused before anything starts.
+    let ports = free_ports();
+    let mut app = setup.start(ports, &["--web-host", "192.168.1.5"]);
+    let status = app.exit().await;
+    assert!(!status.success());
+    assert!(
+        app.output().contains("127.0.0.1") && app.output().contains("0.0.0.0"),
+        "{}",
+        app.output()
     );
     assert!(is_free(ports.0) && is_free(ports.1));
 }

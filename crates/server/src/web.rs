@@ -84,18 +84,18 @@ pub fn check_web_dir(dir: &Path) -> anyhow::Result<PathBuf> {
     std::path::absolute(dir).with_context(|| format!("cannot resolve {name}"))
 }
 
-/// Checks that nothing listens on 127.0.0.1:`port` yet.
-pub fn check_web_port(port: u16) -> anyhow::Result<()> {
+/// Checks that nothing listens on `host`:`port` yet.
+pub fn check_web_port(host: Ipv4Addr, port: u16) -> anyhow::Result<()> {
     if port == 0 {
         bail!("--web-port must be a fixed port, not 0");
     }
-    match std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
+    match std::net::TcpListener::bind((host, port)) {
         Ok(_) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::AddrInUse => bail!(
-            "port {port} on 127.0.0.1 is already in use (is another Open Prism still running?): \
+            "port {port} on {host} is already in use (is another Open Prism still running?): \
              stop that program, or pass another port with --web-port"
         ),
-        Err(err) => bail!("cannot listen on 127.0.0.1:{port}: {err}"),
+        Err(err) => bail!("cannot listen on {host}:{port}: {err}"),
     }
 }
 
@@ -232,17 +232,17 @@ pub struct WebServer {
 }
 
 impl WebServer {
-    /// The standalone Next.js server in `dir`, run with `node` on 127.0.0.1:`port`, forwarding
-    /// `/api/*` to the API on 127.0.0.1:`api_port`.
-    pub fn next(node: PathBuf, dir: PathBuf, port: u16, api_port: u16) -> Self {
+    /// The standalone Next.js server in `dir`, run with `node` on `host`:`port` (127.0.0.1, or
+    /// 0.0.0.0 in a container), forwarding `/api/*` to the API on 127.0.0.1:`api_port`.
+    pub fn next(node: PathBuf, dir: PathBuf, host: Ipv4Addr, port: u16, api_port: u16) -> Self {
         Self {
             program: node,
             args: vec!["server.js".into()],
             dir,
             env: vec![
                 ("PORT", port.to_string()),
-                // Overrides a HOSTNAME set by the shell: never listen beyond loopback.
-                ("HOSTNAME", Ipv4Addr::LOCALHOST.to_string()),
+                // Always set, so a HOSTNAME from the shell (or a container) is never used.
+                ("HOSTNAME", host.to_string()),
                 ("OPENPRISM_API_URL", format!("http://127.0.0.1:{api_port}")),
                 ("NODE_ENV", "production".to_owned()),
                 ("NEXT_TELEMETRY_DISABLED", "1".to_owned()),
@@ -254,7 +254,7 @@ impl WebServer {
         }
     }
 
-    /// Where the web app listens.
+    /// Where the web app is reached from this computer: loopback answers for 0.0.0.0 too.
     pub fn url(&self) -> String {
         format!("http://127.0.0.1:{}", self.port)
     }
@@ -515,12 +515,24 @@ mod tests {
     fn a_busy_web_port_names_the_fix() {
         let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = listener.local_addr().unwrap().port();
-        let err = check_web_port(port).unwrap_err().to_string();
+        let err = check_web_port(Ipv4Addr::LOCALHOST, port)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains(&format!("port {port}")), "{err}");
         assert!(err.contains("--web-port"), "{err}");
         drop(listener);
-        check_web_port(port).unwrap();
-        assert!(check_web_port(0).is_err());
+        check_web_port(Ipv4Addr::LOCALHOST, port).unwrap();
+        assert!(check_web_port(Ipv4Addr::LOCALHOST, 0).is_err());
+    }
+
+    #[test]
+    fn a_port_busy_on_loopback_is_busy_for_every_address_too() {
+        let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let busy = listener.local_addr().unwrap().port();
+        let err = check_web_port(Ipv4Addr::UNSPECIFIED, busy)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains(&format!("port {busy} on 0.0.0.0")), "{err}");
     }
 
     #[test]
@@ -645,7 +657,13 @@ mod tests {
 
     #[test]
     fn the_web_app_gets_its_settings_but_never_the_token() {
-        let web = WebServer::next("node".into(), "/srv/web".into(), 3799, 8799);
+        let web = WebServer::next(
+            "node".into(),
+            "/srv/web".into(),
+            Ipv4Addr::LOCALHOST,
+            3799,
+            8799,
+        );
         let command = web.command();
         let envs: Vec<_> = command.as_std().get_envs().collect();
         assert!(envs.contains(&(OsStr::new(TOKEN_ENV), None)));
@@ -664,6 +682,23 @@ mod tests {
         assert_eq!(
             command.as_std().get_current_dir(),
             Some(Path::new("/srv/web"))
+        );
+        assert_eq!(web.url(), "http://127.0.0.1:3799");
+
+        // In a container: every address, yet still reached (and linked) through loopback.
+        let web = WebServer::next(
+            "node".into(),
+            "/srv/web".into(),
+            Ipv4Addr::UNSPECIFIED,
+            3799,
+            8799,
+        );
+        let command = web.command();
+        assert!(
+            command
+                .as_std()
+                .get_envs()
+                .any(|env| env == (OsStr::new("HOSTNAME"), Some(OsStr::new("0.0.0.0"))))
         );
         assert_eq!(web.url(), "http://127.0.0.1:3799");
     }

@@ -9,8 +9,8 @@ self-hosted alternative to OpenAI Prism, which shuts down on January 1, 2027.
 ## Quickstart
 
 Open Prism runs on your own computer: the API and the web app listen on `127.0.0.1` only,
-and your projects stay in a folder on your disk. On Linux, download a release; on other
-systems, build it from source.
+and your projects stay in a folder on your disk. On Linux, download a release; on macOS and
+Windows, run the Docker image; or build it from source anywhere.
 
 ### Download a release (Linux)
 
@@ -46,6 +46,47 @@ gh attestation verify open-prism-<version>-linux-x64.tar.gz --repo nttung245/ope
 
 Projects and settings live in `~/.local/share/open-prism`, not in the release folder, so a
 newer release can replace the folder.
+
+### Run with Docker (macOS, Windows, Linux)
+
+**You need:** [Docker](https://docs.docker.com/get-docker/) (Docker Desktop on macOS and
+Windows). The image holds everything, TeX Live included: about 2.7 GB to download and 9.5 GB on
+disk. It runs on amd64 and arm64 (Apple Silicon too). Images are published from the release
+after 0.1.0 on.
+
+Save [`compose.yaml`](compose.yaml) in a folder, then in that folder:
+
+```sh
+docker compose up -d               # downloads the image the first time, then starts Open Prism
+docker compose logs open-prism     # shows the sign-in link
+```
+
+Open the link it shows (`http://127.0.0.1:3737/login?token=…`);
+`docker compose exec open-prism open-prism print-token` prints the token again. Stop it with
+`docker compose down`. Projects and settings stay in the `open-prism-data` volume, so you can
+replace or upgrade the container: `docker compose pull && docker compose up -d`.
+
+Without compose:
+
+```sh
+docker run -d --name open-prism --init -p 127.0.0.1:3737:3737 -v open-prism-data:/data \
+  ghcr.io/nttung245/open-prism:latest
+docker logs open-prism             # shows the sign-in link
+```
+
+Keep `127.0.0.1:` in front of the port: without it Docker opens Open Prism to your whole
+network. For another port, change both sides and tell the app, as in
+`-p 127.0.0.1:4000:4000 -e OPENPRISM_WEB_PORT=4000`.
+
+To back up, stop Open Prism, then copy the data out:
+`docker compose stop && docker compose cp open-prism:/data ./open-prism-backup` (or
+`docker cp open-prism:/data ./open-prism-backup` without compose). A folder of your own instead
+of the volume (`-v ./data:/data`) works only if the user with uid 1000 can write to it.
+
+The image is the Linux release package on the official
+[TeX Live image](https://hub.docker.com/r/texlive/texlive): Open Prism compiles inside the
+container and never needs your Docker socket. `latest` is the newest published release;
+`<version>` tags stay as they are.
 
 ### Build from source
 
@@ -257,7 +298,8 @@ starts, so fix the cause and start it again:
 
 A native TeX Live (`latexmk`) or [Tectonic](https://tectonic-typesetting.github.io/) works too.
 
-**Lost the sign-in link.** Run `./open-prism print-token` in the release folder, or
+**Lost the sign-in link.** Run `./open-prism print-token` in the release folder,
+`docker compose exec open-prism open-prism print-token` with Docker, or
 `./target/release/open-prism-api print-token` in a source build (add the same `--data-dir` if
 you use one), and paste the token on the `/login` page, or open
 `http://127.0.0.1:3737/login?token=<token>`.
@@ -277,7 +319,8 @@ its own message follows. A monthly spending cap, for example, does not lift by w
 ### Where is my data
 
 Everything is in one folder: `~/.local/share/open-prism` on Linux, the platform's local data
-folder elsewhere, or the folder given with `--data-dir` (`OPENPRISM_DATA_DIR`). It holds
+folder elsewhere, `/data` in the Docker image (the `open-prism-data` volume), or the folder
+given with `--data-dir` (`OPENPRISM_DATA_DIR`). It holds
 `projects/` (one plain folder per project), `history/`, `attachments/`, the database
 `open-prism.db` (settings, provider keys, conversations), `access-token`, and compile output
 and caches (`build/`, `runs/`, `cache/`, `tmp/`) that a backup can skip. To back up, stop
@@ -293,13 +336,18 @@ Open Prism and copy the folder.
 | `OPENPRISM_TEX_IMAGE` | API, `just tex-pull` | `texlive/texlive:latest` (`none` disables Docker) |
 | `OPENPRISM_API_URL` | web (set by `serve --web`) | `http://127.0.0.1:8787` |
 | `OPENPRISM_WEB_PORT` | `serve --web` | `3737` |
+| `OPENPRISM_WEB_HOST` | `serve --web` | `127.0.0.1` (`0.0.0.0` in the Docker image) |
 | `OPENPRISM_NODE` | `serve --web` | `node` from `PATH` |
 | `OPENPRISM_OPEN` | `serve --web` | off (`true` is the same as `--open`) |
 | `OPENPRISM_NO_BROWSER` | `./open-prism` in a release | unset (`1` leaves out `--open`) |
 | `WEB_PORT` | `just dev` / `just start` | `3737` |
 
 Most have a flag too: `--data-dir`, `--port` and `--tex-image`, and after `serve`,
-`--web-port`, `--node` and `--open` (`open-prism-api --help` lists them).
+`--web-port`, `--web-host`, `--node` and `--open` (`open-prism-api --help` lists them).
+
+`--web-host` takes `127.0.0.1` (this computer only) or `0.0.0.0` (every address). Use `0.0.0.0`
+only in a container whose port is published on the host's `127.0.0.1`, as the Docker image
+does. The API always listens on `127.0.0.1`.
 
 `serve --web` checks for Node.js and the build and that both ports are free. It then starts
 the web app and prints the sign-in link once the web app is ready. The web app's output shows
@@ -390,16 +438,30 @@ for arm64 on Ubuntu 22.04: the API, the standalone web app, the official Node.js
 (`scripts/smoke-release.sh`): start, the web app and the API answer, a clean stop. `just
 package` does the same for your machine.
 
+From each package it builds the Docker image ([`Dockerfile`](Dockerfile): the package on the
+official TeX Live image, pinned by digest) and runs it on that platform
+(`scripts/smoke-image.sh`): sign in, compile the article template to a PDF, the health check,
+a clean `docker stop`, and the data still there in a new container. `just image` does the same
+for your machine.
+
 1. Set the new `version` in `Cargo.toml` (`[workspace.package]`). Check for a newer Node.js 22
    release with security fixes, and if there is one, update `NODE_VERSION` and both checksums
-   in `scripts/package-release.sh`.
+   in `scripts/package-release.sh`. For a newer TeX Live in the image, set the digest of `BASE`
+   in `Dockerfile` to the one `docker pull texlive/texlive:latest` prints.
 2. Merge to `main`.
 3. Run the workflow by hand (Actions → Release → Run workflow): it builds and tests both
-   packages without releasing anything. Pull requests that change the packaging run it too.
+   packages and both images without releasing or pushing anything. Pull requests that change
+   the packaging or the image run it too.
 4. Push the tag: `git tag v<version> && git push origin v<version>`. The workflow refuses a tag
-   that differs from `Cargo.toml`. When both packages pass, it makes a **draft** release with
-   them, `SHA256SUMS` and build provenance attestations.
-5. Look over the draft on the Releases page, then publish it.
+   that differs from `Cargo.toml`. When both packages and both images pass, it pushes the image
+   as `ghcr.io/nttung245/open-prism:<version>` (and `<version>-amd64`, `<version>-arm64`), and
+   makes a **draft** release with the packages, `SHA256SUMS` and build provenance attestations
+   (for the image too: `gh attestation verify oci://ghcr.io/nttung245/open-prism:<version>
+   --repo nttung245/open-prism`).
+5. Look over the draft on the Releases page, then publish it. Publishing moves the image's
+   `latest` tag to this version. After the first image ever pushed, check that
+   `docker pull ghcr.io/nttung245/open-prism:<version>` works without signing in; if not, make
+   the `open-prism` package public in its settings on GitHub.
 
 ## Roadmap
 
@@ -410,7 +472,7 @@ package` does the same for your machine.
       "fix compile errors", fallback for models without tool calling
 - [x] **M3 Writing help**: version history, suggestions as you type, capture and ask
       about the PDF, images in the chat, image and handwriting to LaTeX
-- [ ] **M4 Release**: one-command run and user docs (done), prebuilt binaries, Docker image
+- [ ] **M4 Release**: one-command run, user docs and prebuilt Linux packages (done), Docker image
 
 ## License
 

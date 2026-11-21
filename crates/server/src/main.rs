@@ -125,9 +125,16 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     };
 
-    web::check_web_port(options.port)?;
+    web::check_web_port(options.host, options.port)?;
     tracing::info!(dir = %dir.display(), "starting the web app");
-    let web = web::WebServer::next(options.node, dir, options.port, args.port);
+    if !options.host.is_loopback() {
+        tracing::info!(
+            "the web app listens on {}:{} (every address of this machine or container)",
+            options.host,
+            options.port
+        );
+    }
+    let web = web::WebServer::next(options.node, dir, options.host, options.port, args.port);
     let link = web::sign_in_link(&web.url(), &sign_in_token);
     run_with_web(listener, app, web, link, options.open).await
 }

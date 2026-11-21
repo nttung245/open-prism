@@ -1,0 +1,18 @@
+# Open Prism in Docker, with TeX Live inside: `docker compose up -d`, then the sign-in link is in
+# `docker compose logs open-prism`. Only this computer can reach it (127.0.0.1); projects and
+# settings stay in the `open-prism-data` volume when the container is replaced or upgraded.
+name: open-prism
+
+services:
+  open-prism:
+    image: ${OPENPRISM_IMAGE:-ghcr.io/nttung245/open-prism:latest}
+    init: true
+    ports:
+      # Keep 127.0.0.1: without it Docker opens the port to the whole network.
+      - "127.0.0.1:3737:3737"
+    volumes:
+      - open-prism-data:/data
+    restart: unless-stopped
+
+volumes:
+  open-prism-data:
