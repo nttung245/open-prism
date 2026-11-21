@@ -321,3 +321,70 @@ async fn a_running_job_does_not_slow_saving_and_compiling() {
     assert!(app.state.paths.job_dir(&job.id).join("step-0").exists());
     stop.cancel();
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn compile_dir_compiles_a_folder_outside_the_projects() {
+    let bin = tempfile::tempdir().unwrap();
+    let app = TestApp::new(vec![super::api_tests::fake_latexmk(bin.path())]).await;
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(folder.path().join("main.tex"), "\\documentclass{article}").unwrap();
+    let work = folder.path().join("work");
+    let result = crate::compiler::compile_dir(
+        &app.state,
+        folder.path(),
+        "main.tex",
+        &work,
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.status,
+        openprism_core::compile::CompileStatus::Success,
+        "{result:?}"
+    );
+    assert!(result.has_pdf && result.diagnostics.is_empty());
+    assert!(work.join("run/output.pdf").is_file());
+    // Nothing was added to the projects.
+    assert_eq!(
+        std::fs::read_dir(&app.state.paths.projects)
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn compile_dir_reports_errors_with_their_line() {
+    let bin = tempfile::tempdir().unwrap();
+    let engine = super::api_tests::fake_latexmk_running(
+        bin.path(),
+        "printf './main.tex:3: Undefined control sequence.\\nl.3 \\\\foo\\n' > \"$out/main.log\"\nexit 12\n",
+    );
+    let app = TestApp::new(vec![engine]).await;
+    let folder = tempfile::tempdir().unwrap();
+    std::fs::write(folder.path().join("main.tex"), "a\nb\n\\foo\n").unwrap();
+    let result = crate::compiler::compile_dir(
+        &app.state,
+        folder.path(),
+        "main.tex",
+        &folder.path().join("work"),
+        &CancellationToken::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        result.status,
+        openprism_core::compile::CompileStatus::Failed,
+        "{result:?}"
+    );
+    let error = &result.diagnostics[0];
+    assert_eq!(error.severity, openprism_core::latexlog::Severity::Error);
+    assert_eq!(error.line, Some(3), "{error:?}");
+    assert!(
+        error.message.contains("Undefined control sequence"),
+        "{error:?}"
+    );
+}

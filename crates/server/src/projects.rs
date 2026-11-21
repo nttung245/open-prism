@@ -156,11 +156,13 @@ pub async fn create(state: &AppState, request: CreateProjectRequest) -> Result<P
     Ok(project)
 }
 
-/// Creates a project from an extracted archive directory. `extract` fills the new project
-/// directory and returns the detected main file.
+/// Creates a project from files `extract` puts in its new directory (an extracted archive, an
+/// imported PDF); `extract` returns the detected main file. `summary` describes the first
+/// version in the history.
 pub async fn create_from_dir<F>(
     state: &AppState,
     name: &str,
+    summary: &str,
     extract: F,
 ) -> Result<Project, ApiError>
 where
@@ -181,7 +183,7 @@ where
         Ok(main_file) => {
             let main_file = main_file.unwrap_or_else(|| DEFAULT_MAIN_FILE.to_owned());
             let project = insert(state, &id, &name, &main_file).await?;
-            history::take_quietly(state, &id, SnapshotKind::Created, "Project imported").await;
+            history::take_quietly(state, &id, SnapshotKind::Created, summary).await;
             Ok(project)
         }
         Err(err) => {

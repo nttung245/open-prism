@@ -101,12 +101,27 @@ fn from_row(row: &SqliteRow) -> Result<JobRow, sqlx::Error> {
     })
 }
 
+#[cfg(test)]
 pub async fn create(
     db: &SqlitePool,
     kind: &str,
     title: &str,
     params: &serde_json::Value,
 ) -> Result<JobView, sqlx::Error> {
+    let id = insert(db, kind, title, params).await?;
+    Ok(get(db, &id).await?.ok_or(sqlx::Error::RowNotFound)?.view)
+}
+
+/// Inserts a queued job (also inside a transaction) and returns its id.
+pub async fn insert<'c, E>(
+    db: E,
+    kind: &str,
+    title: &str,
+    params: &serde_json::Value,
+) -> Result<String, sqlx::Error>
+where
+    E: sqlx::Executor<'c, Database = sqlx::Sqlite>,
+{
     let id = Uuid::now_v7().to_string();
     let now = now_ms();
     sqlx::query(
@@ -121,7 +136,7 @@ pub async fn create(
     .bind(now)
     .execute(db)
     .await?;
-    Ok(get(db, &id).await?.ok_or(sqlx::Error::RowNotFound)?.view)
+    Ok(id)
 }
 
 pub async fn get(db: &SqlitePool, id: &str) -> Result<Option<JobRow>, sqlx::Error> {

@@ -139,7 +139,7 @@ impl AppState {
     ) -> anyhow::Result<Self> {
         let paths = DataPaths::prepare(data_dir)?;
         let db = crate::db::open(&paths.database).await?;
-        Ok(Self(Arc::new(Inner {
+        let state = Self(Arc::new(Inner {
             token,
             compiler: Compiler::new(engines.clone()),
             engines,
@@ -150,7 +150,11 @@ impl AppState {
             running_turns: RunningTurns::default(),
             jobs: Jobs::default(),
             write_locks: Mutex::default(),
-        })))
+        }));
+        state
+            .jobs
+            .register(Arc::new(crate::jobs::pdf_import::PdfImport));
+        Ok(state)
     }
 }
 

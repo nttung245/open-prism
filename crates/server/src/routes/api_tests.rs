@@ -501,11 +501,21 @@ async fn import_and_export_zip() {
 /// for writing while another test forks (that makes exec fail with "Text file busy").
 #[cfg(unix)]
 pub(super) fn fake_latexmk(dir: &std::path::Path) -> EngineInfo {
+    fake_latexmk_running(
+        dir,
+        "sleep 0.2\nprintf '%%PDF-1.5 fake pdf' > \"$out/main.pdf\"\n\
+         printf 'gz' > \"$out/main.synctex.gz\"\nprintf 'This is pdfTeX\\n' > \"$out/main.log\"\n",
+    )
+}
+
+/// A fake `latexmk` running `body` with `$out` set to its `-outdir`.
+#[cfg(unix)]
+pub(super) fn fake_latexmk_running(dir: &std::path::Path, body: &str) -> EngineInfo {
     use std::process::{Command, Stdio};
     let path = dir.join("latexmk");
-    let script = "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in -outdir=*) out=\"${a#-outdir=}\";; esac; done\n\
-         sleep 0.2\nprintf '%%PDF-1.5 fake pdf' > \"$out/main.pdf\"\n\
-         printf 'gz' > \"$out/main.synctex.gz\"\nprintf 'This is pdfTeX\\n' > \"$out/main.log\"\n";
+    let script = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in -outdir=*) out=\"${{a#-outdir=}}\";; esac; done\n{body}"
+    );
     let mut child = Command::new("/bin/sh")
         .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
         .arg(&path)

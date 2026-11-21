@@ -60,13 +60,6 @@ impl From<AiError> for JobError {
 }
 
 /// One kind of background job: how to plan it, run one step, and put the steps together.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "used by kinds of jobs; the first, the PDF import, comes with add-pdf-import"
-    )
-)]
 pub trait JobKind: Send + Sync + 'static {
     fn name(&self) -> &'static str;
     /// Most steps of one job running at once.
@@ -86,13 +79,6 @@ pub trait JobKind: Send + Sync + 'static {
 
 /// What a job's code gets to work with.
 #[derive(Clone)]
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "used by kinds of jobs; the first, the PDF import, comes with add-pdf-import"
-    )
-)]
 pub struct JobContext {
     pub id: String,
     pub params: serde_json::Value,
@@ -102,14 +88,6 @@ pub struct JobContext {
     /// Cancelled when the user cancels the job or the app stops.
     pub cancel: CancellationToken,
 }
-
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "used by kinds of jobs; the first, the PDF import, comes with add-pdf-import"
-    )
-)]
 impl JobContext {
     /// Says what the job is doing, for display.
     pub async fn set_message(&self, message: &str) {
@@ -145,13 +123,6 @@ struct Running {
 }
 
 /// The background jobs of the app: the kinds it knows and the job running now.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "used by kinds of jobs; the first, the PDF import, comes with add-pdf-import"
-    )
-)]
 pub struct Jobs {
     kinds: RwLock<HashMap<&'static str, Arc<dyn JobKind>>>,
     pub(super) wake: Notify,
@@ -179,14 +150,6 @@ impl Default for Jobs {
         }
     }
 }
-
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "used by kinds of jobs; the first, the PDF import, comes with add-pdf-import"
-    )
-)]
 impl Jobs {
     pub fn register(&self, kind: Arc<dyn JobKind>) {
         self.kinds
@@ -219,14 +182,8 @@ impl Jobs {
     }
 }
 
-/// Queues a new job of a registered kind.
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "used by kinds of jobs; the first, the PDF import, comes with add-pdf-import"
-    )
-)]
+/// Queues a new job of a registered kind (kinds with input files use `create_prepared`).
+#[cfg(test)]
 pub async fn create(
     state: &AppState,
     kind: &str,
@@ -237,6 +194,47 @@ pub async fn create(
         return Err(ApiError::internal(format!("unknown job kind {kind:?}")));
     }
     let job = store::create(&state.db, kind, title, params).await?;
+    state
+        .events
+        .publish_app(AppEvent::JobChanged { job: job.clone() });
+    state.jobs.wake.notify_one();
+    Ok(job)
+}
+
+/// Queues a new job whose input files `prepare` puts in its directory first. The job is invisible
+/// to the scheduler until they are there: it is inserted in a transaction that commits only
+/// after `prepare` succeeded. When `prepare` fails there is no job and no directory.
+pub async fn create_prepared<F>(
+    state: &AppState,
+    kind: &str,
+    title: &str,
+    params: &serde_json::Value,
+    prepare: F,
+) -> Result<JobView, ApiError>
+where
+    F: FnOnce(&std::path::Path) -> Result<(), ApiError> + Send + 'static,
+{
+    if state.jobs.kind(kind).is_none() {
+        return Err(ApiError::internal(format!("unknown job kind {kind:?}")));
+    }
+    let mut tx = state.db.begin().await?;
+    let id = store::insert(&mut *tx, kind, title, params).await?;
+    let dir = state.paths.job_dir(&id);
+    let target = dir.clone();
+    let prepared = tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&target).map_err(ApiError::internal)?;
+        prepare(&target)
+    })
+    .await
+    .map_err(ApiError::from)
+    .and_then(|result| result);
+    if let Err(err) = prepared {
+        drop(tx);
+        super::remove_dir(&dir).await;
+        return Err(err);
+    }
+    tx.commit().await?;
+    let job = view_or_404(state, &id).await?;
     state
         .events
         .publish_app(AppEvent::JobChanged { job: job.clone() });
