@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 
+use crate::auth::CurrentUser;
 use crate::error::ApiError;
 use crate::settings::{
     self, CreateProviderRequest, ProviderKindInfo, ProviderTestResult, ProviderView, Roles,
@@ -26,49 +27,59 @@ async fn kinds() -> Json<Vec<ProviderKindInfo>> {
     Json(settings::kinds())
 }
 
-async fn list(State(state): State<AppState>) -> Result<Json<Vec<ProviderView>>, ApiError> {
-    Ok(Json(settings::list(&state).await?))
+async fn list(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+) -> Result<Json<Vec<ProviderView>>, ApiError> {
+    Ok(Json(settings::list(&state, &principal).await?))
 }
 
 async fn create(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Json(request): Json<CreateProviderRequest>,
 ) -> Result<(StatusCode, Json<ProviderView>), ApiError> {
     Ok((
         StatusCode::CREATED,
-        Json(settings::create(&state, request).await?),
+        Json(settings::create(&state, &principal, request).await?),
     ))
 }
 
 async fn show(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Json<ProviderView>, ApiError> {
-    Ok(Json(settings::get(&state, &id).await?))
+    Ok(Json(settings::get_for(&state, &principal, &id).await?))
 }
 
 async fn update(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
     Json(request): Json<UpdateProviderRequest>,
 ) -> Result<Json<ProviderView>, ApiError> {
-    Ok(Json(settings::update(&state, &id, request).await?))
+    Ok(Json(
+        settings::update(&state, &principal, &id, request).await?,
+    ))
 }
 
 async fn remove(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    settings::delete(&state, &id).await?;
+    settings::delete(&state, &principal, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Lists the provider's models; failures are reported in the body, not as an HTTP error.
 async fn test(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Json<ProviderTestResult>, ApiError> {
-    Ok(Json(settings::test(&state, &id).await?))
+    Ok(Json(settings::test(&state, &principal, &id).await?))
 }
 
 async fn roles(State(state): State<AppState>) -> Result<Json<Roles>, ApiError> {

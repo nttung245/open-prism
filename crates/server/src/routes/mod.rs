@@ -24,6 +24,8 @@ mod members_tests;
 #[cfg(test)]
 mod pdf_import_tests;
 mod projects;
+#[cfg(test)]
+mod providers_tests;
 mod settings;
 mod synctex;
 mod users;

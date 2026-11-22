@@ -86,11 +86,13 @@ async fn model(server: &MockServer, page_bodies: &[&str]) {
 async fn provider(app: &TestApp, server: &MockServer) -> ModelRef {
     let view = settings::create(
         &app.state,
+        &crate::auth::Principal::Local,
         CreateProviderRequest {
             name: "Fake".into(),
             kind: ProviderKind::OpenaiCompatible,
             base_url: Some(format!("{}/v1", server.uri())),
             api_key: Some("sk-test".into()),
+            shared: None,
         },
     )
     .await

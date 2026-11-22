@@ -4,4 +4,9 @@ import type { ProviderKind } from "./ProviderKind";
 /**
  * A provider as shown in the UI (without its key).
  */
-export type ProviderView = { id: string, name: string, kind: ProviderKind, baseUrl: string | null, hasApiKey: boolean, createdAt: number, };
+export type ProviderView = { id: string, name: string, kind: ProviderKind, baseUrl: string | null, hasApiKey: boolean, 
+/**
+ * Shared by everyone (managed by admins), or personal (server mode). Always true in
+ * single-user mode.
+ */
+shared: boolean, createdAt: number, };
