@@ -20,6 +20,7 @@ import type { JobView } from "@/lib/api/types/JobView";
 import type { Project } from "@/lib/api/types/Project";
 import { ImportPdfDialog } from "./import-pdf-dialog";
 import { JobList, showJob } from "./job-list";
+import { MembersButton } from "./members-dialog";
 
 const PROJECTS_KEY = ["projects"] as const;
 
@@ -207,6 +208,10 @@ export function ProjectList({
                   <Pencil className="size-4" />
                 </IconButton>
                 <DownloadMenu projectId={project.id} />
+                <MembersButton
+                  projectId={project.id}
+                  projectName={project.name}
+                />
                 <IconButton
                   label="Delete"
                   className="hover:text-danger"

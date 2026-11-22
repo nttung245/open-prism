@@ -346,6 +346,14 @@ function TimelineItem({
               {timeAgo(snapshot.createdAt)}
             </time>
             <span>{kind.label}</span>
+            {snapshot.author && (
+              <span
+                className="max-w-32 truncate"
+                title={`By ${snapshot.author.displayName}`}
+              >
+                {snapshot.author.displayName}
+              </span>
+            )}
             <Counts snapshot={snapshot} />
           </span>
         </span>

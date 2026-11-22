@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { apiFetch } from "@/lib/api/client";
 import { fetchSession, SESSION_KEY } from "@/lib/auth";
+import { useHydrated } from "@/lib/use-hydrated";
 import { ChangePasswordDialog } from "./change-password-dialog";
 import { SessionsDialog } from "./sessions-dialog";
 
@@ -37,8 +38,9 @@ export function UserMenu({ compact = false }: { compact?: boolean }) {
     };
   }, [menu]);
 
+  const hydrated = useHydrated();
   const user = session.data?.mode === "server" ? session.data.user : null;
-  if (!user) return null;
+  if (!hydrated || !user) return null;
 
   const choose = (next: Open) => {
     setMenu(false);
