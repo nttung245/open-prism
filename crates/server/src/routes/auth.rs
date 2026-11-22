@@ -1,5 +1,5 @@
-use axum::extract::{Request, State};
-use axum::http::StatusCode;
+use axum::extract::State;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -8,9 +8,10 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::auth::{SESSION_COOKIE, is_authenticated};
+use crate::auth::{SESSION_COOKIE, identify};
 use crate::error::ApiError;
 use crate::state::AppState;
+use crate::users::SessionUser;
 
 const SESSION_MAX_AGE_DAYS: i64 = 30;
 
@@ -20,10 +21,24 @@ pub struct LoginRequest {
     pub token: String,
 }
 
+/// How this Open Prism runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum AppMode {
+    /// One user on this computer, signed in with the access token.
+    Single,
+    /// Accounts and passwords.
+    Server,
+}
+
 #[derive(Debug, Serialize, TS)]
 #[ts(export)]
 pub struct SessionResponse {
     pub authenticated: bool,
+    pub mode: AppMode,
+    /// The signed-in account; `null` in single-user mode and when not signed in.
+    pub user: Option<SessionUser>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -69,9 +84,16 @@ async fn logout(jar: CookieJar) -> impl IntoResponse {
 async fn session(
     State(state): State<AppState>,
     jar: CookieJar,
-    request: Request,
+    headers: HeaderMap,
 ) -> Json<SessionResponse> {
+    let principal = identify(&state, &jar, &headers).await;
     Json(SessionResponse {
-        authenticated: is_authenticated(&state.token, &jar, &request),
+        authenticated: principal.is_some(),
+        mode: if state.mode.is_server() {
+            AppMode::Server
+        } else {
+            AppMode::Single
+        },
+        user: principal.and_then(|principal| principal.user().cloned()),
     })
 }

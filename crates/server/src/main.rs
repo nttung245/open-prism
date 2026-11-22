@@ -10,11 +10,13 @@ mod history;
 mod image_latex;
 mod images;
 mod jobs;
+mod mode;
 mod projects;
 mod routes;
 mod settings;
 mod state;
 mod synctex_cache;
+mod users;
 mod web;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -45,6 +47,18 @@ async fn main() -> anyhow::Result<()> {
     nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
 
     let args = cli::Args::parse();
+    // Check the mode flags before anything else: a server-mode mistake must stop here.
+    let mode = args.mode().map_err(anyhow::Error::msg)?;
+    if let Some(server) = mode.server() {
+        tracing::info!(public_url = %server.public_url, "server mode: accounts and passwords");
+        if server.insecure_http {
+            tracing::warn!(
+                public_url = %server.public_url,
+                "--insecure-http: passwords and session cookies travel unencrypted. Use this only \
+                 for a test on a network you trust, never on the Internet"
+            );
+        }
+    }
     // `serve --web`: fail on a missing build or Node before starting anything.
     let web_options = args.web();
     let web_dir = match &web_options {
@@ -101,7 +115,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(kind = ?engine.kind, runtime = ?engine.runtime, version = ?engine.version, "TeX engine");
     }
 
-    let state = AppState::open(&data_dir, token, engines).await?;
+    let state = AppState::open_in(mode.clone(), &data_dir, token, engines).await?;
     let _watcher = watch_files(&state)?;
     // Background jobs stop with the app; a job cut short resumes at the next start.
     let jobs_stop = tokio_util::sync::CancellationToken::new();

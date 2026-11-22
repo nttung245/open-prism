@@ -32,6 +32,7 @@ insta = { version = "1.49", features = ["yaml"] }
 mime_guess = "2"
 nix = { version = "0.32", features = ["signal", "process", "fs"] }
 notify = "8.2"
+url = "2.5"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

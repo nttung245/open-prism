@@ -163,9 +163,102 @@ mod tests {
     async fn session_endpoint_reports_state() {
         let (_, _, anonymous) = send(get("/api/auth/session").body(Body::empty()).unwrap()).await;
         assert_eq!(anonymous["authenticated"], false);
+        assert_eq!(anonymous["mode"], "single");
+        assert!(anonymous["user"].is_null());
 
         let signed_in = get("/api/auth/session").header(header::COOKIE, session_cookie());
         let (_, _, body) = send(signed_in.body(Body::empty()).unwrap()).await;
         assert_eq!(body["authenticated"], true);
+        assert_eq!(body["mode"], "single");
+        assert!(body["user"].is_null());
+    }
+
+    /// An app in server mode, with its public address.
+    async fn server_app() -> Router {
+        let dir = tempfile::tempdir().unwrap();
+        let mode = crate::mode::Mode::resolve(
+            crate::mode::ModeArg::Server,
+            Some("https://prism.example.org"),
+            false,
+        )
+        .unwrap();
+        let state = AppState::open_in(
+            mode,
+            dir.path(),
+            AccessToken::new(TOKEN).unwrap(),
+            Vec::new(),
+        )
+        .await
+        .unwrap();
+        std::mem::forget(dir);
+        router(state)
+    }
+
+    async fn send_to(app: Router, request: Request<Body>) -> (StatusCode, serde_json::Value) {
+        let response = app.oneshot(request).await.unwrap();
+        let status = response.status();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let json = if bytes.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::from_slice(&bytes).unwrap()
+        };
+        (status, json)
+    }
+
+    #[tokio::test]
+    async fn server_mode_reports_itself_and_ignores_the_token_cookie() {
+        let app = server_app().await;
+        let (_, body) = send_to(
+            app.clone(),
+            get("/api/auth/session").body(Body::empty()).unwrap(),
+        )
+        .await;
+        assert_eq!(body["mode"], "server");
+        assert_eq!(body["authenticated"], false);
+
+        // The single-user cookie (derived from the access token) signs nobody in here.
+        let with_cookie = get("/api/projects").header(header::COOKIE, session_cookie());
+        let (status, _) = send_to(app.clone(), with_cookie.body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+        // Scripts on the machine still use the token as a bearer token.
+        let with_bearer =
+            get("/api/projects").header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+        let (status, body) = send_to(app.clone(), with_bearer.body(Body::empty()).unwrap()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.is_array());
+
+        let session =
+            get("/api/auth/session").header(header::AUTHORIZATION, format!("Bearer {TOKEN}"));
+        let (_, body) = send_to(app, session.body(Body::empty()).unwrap()).await;
+        assert_eq!(body["authenticated"], true);
+        assert!(body["user"].is_null());
+    }
+
+    #[tokio::test]
+    async fn the_current_user_reaches_handlers() {
+        use crate::auth::{CurrentUser, Principal};
+        async fn whoami(CurrentUser(principal): CurrentUser) -> String {
+            format!("{} {}", principal == Principal::Local, principal.is_admin())
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::open(dir.path(), AccessToken::new(TOKEN).unwrap(), Vec::new())
+            .await
+            .unwrap();
+        let app = Router::new()
+            .route("/api/whoami", axum::routing::get(whoami))
+            .layer(middleware::from_fn_with_state(
+                state.clone(),
+                crate::auth::require_session,
+            ))
+            .with_state(state);
+        let request = get("/api/whoami").header(header::COOKIE, session_cookie());
+        let response = app
+            .oneshot(request.body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&bytes[..], b"true true");
     }
 }

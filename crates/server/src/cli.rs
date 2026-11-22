@@ -5,6 +5,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use openprism_core::engines::DEFAULT_DOCKER_IMAGE;
 
+use crate::mode::{Mode, ModeArg};
+
 /// Open Prism API server. Listens on 127.0.0.1 only; the Next.js app is the public entry point.
 #[derive(Debug, Parser)]
 #[command(name = "open-prism-api", version, about)]
@@ -22,6 +24,21 @@ pub struct Args {
     /// It is never pulled automatically: run `docker pull <image>` once.
     #[arg(long, env = "OPENPRISM_TEX_IMAGE", default_value = DEFAULT_DOCKER_IMAGE, global = true)]
     pub tex_image: String,
+
+    /// `single` (default): one user on this computer, signed in with the access token.
+    /// `server`: accounts and passwords for several people, behind `--public-url`.
+    #[arg(long, env = "OPENPRISM_MODE", value_enum, default_value_t = ModeArg::Single, global = true)]
+    pub mode: ModeArg,
+
+    /// Server mode: the https:// address people open, such as https://prism.example.org.
+    /// Sign-in and invitation links use it, and write requests must come from it.
+    #[arg(long, env = "OPENPRISM_PUBLIC_URL", value_name = "URL", global = true)]
+    pub public_url: Option<String>,
+
+    /// Server mode: allow an http:// public URL, for a test on a network you trust. Passwords
+    /// and session cookies then travel unencrypted.
+    #[arg(long, env = "OPENPRISM_INSECURE_HTTP", global = true)]
+    pub insecure_http: bool,
 
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -93,6 +110,11 @@ impl Args {
     pub fn docker_image(&self) -> Option<String> {
         let image = self.tex_image.trim();
         (!image.is_empty() && !image.eq_ignore_ascii_case("none")).then(|| image.to_owned())
+    }
+
+    /// The mode, after checking `--mode`, `--public-url` and `--insecure-http` together.
+    pub fn mode(&self) -> Result<Mode, String> {
+        Mode::resolve(self.mode, self.public_url.as_deref(), self.insecure_http)
     }
 
     pub fn resolve_data_dir(&self) -> anyhow::Result<PathBuf> {
@@ -220,6 +242,46 @@ mod tests {
             parse(&["print-token"]).command,
             Some(Command::PrintToken)
         ));
+    }
+
+    #[test]
+    fn mode_flags_go_before_or_after_the_command() {
+        if std::env::var_os("OPENPRISM_MODE").is_none()
+            && std::env::var_os("OPENPRISM_PUBLIC_URL").is_none()
+        {
+            assert_eq!(parse(&["serve"]).mode(), Ok(Mode::Single));
+            let err = parse(&["serve", "--mode", "server"]).mode().unwrap_err();
+            assert!(err.contains("needs --public-url"), "{err}");
+        }
+        let args = parse(&[
+            "--mode",
+            "server",
+            "serve",
+            "--public-url",
+            "https://prism.example.org",
+        ]);
+        assert!(args.mode().unwrap().is_server());
+        let args = parse(&[
+            "serve",
+            "--mode",
+            "server",
+            "--public-url",
+            "http://192.168.1.5:3737",
+        ]);
+        assert!(args.mode().unwrap_err().contains("needs HTTPS"));
+        assert!(
+            parse(&[
+                "serve",
+                "--mode",
+                "server",
+                "--public-url",
+                "http://192.168.1.5:3737",
+                "--insecure-http",
+            ])
+            .mode()
+            .is_ok()
+        );
+        assert!(Args::try_parse_from(["open-prism-api", "--mode", "cluster"]).is_err());
     }
 
     #[test]

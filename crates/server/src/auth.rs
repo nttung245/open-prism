@@ -14,8 +14,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context;
-use axum::extract::{Request, State};
+use axum::extract::{FromRequestParts, Request, State};
+use axum::http::HeaderMap;
 use axum::http::header::AUTHORIZATION;
+use axum::http::request::Parts;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::CookieJar;
@@ -24,7 +26,9 @@ use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
 use crate::error::ApiError;
+use crate::mode::Mode;
 use crate::state::AppState;
+use crate::users::{SessionUser, UserRole};
 
 pub const SESSION_COOKIE: &str = "openprism_session";
 pub const TOKEN_FILE: &str = "access-token";
@@ -133,30 +137,91 @@ fn is_public(path: &str) -> bool {
     path == "/api/health" || path.starts_with("/api/auth/")
 }
 
-/// Middleware: every non-public request needs a valid session cookie or bearer token.
-pub async fn require_session(
-    State(state): State<AppState>,
-    jar: CookieJar,
-    request: Request,
-    next: Next,
-) -> Response {
-    if is_public(request.uri().path()) || is_authenticated(&state.token, &jar, &request) {
-        return next.run(request).await;
-    }
-    ApiError::unauthorized("sign in with the Open Prism access token").into_response()
+/// Who sends a request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Principal {
+    /// Single-user mode, or the access token sent as a bearer token (scripts on the machine
+    /// itself): may do everything.
+    Local,
+    /// A signed-in account (server mode).
+    User(SessionUser),
 }
 
-pub fn is_authenticated(token: &AccessToken, jar: &CookieJar, request: &Request) -> bool {
-    let bearer = request
-        .headers()
+impl Principal {
+    /// The account, or `None` for [`Principal::Local`], whose rows keep NULL owners.
+    pub fn user(&self) -> Option<&SessionUser> {
+        match self {
+            Self::Local => None,
+            Self::User(user) => Some(user),
+        }
+    }
+
+    pub fn user_id(&self) -> Option<&str> {
+        self.user().map(|user| user.id.as_str())
+    }
+
+    /// May manage the server: admins, and [`Principal::Local`].
+    pub fn is_admin(&self) -> bool {
+        self.user().is_none_or(|user| user.role == UserRole::Admin)
+    }
+}
+
+/// The principal behind a request, or `None` when it is not signed in.
+pub async fn identify(state: &AppState, jar: &CookieJar, headers: &HeaderMap) -> Option<Principal> {
+    let bearer = headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .is_some_and(|candidate| token.matches(candidate.trim()));
-    bearer
-        || jar
-            .get(SESSION_COOKIE)
-            .is_some_and(|c| token.verify_session(c.value()))
+        .is_some_and(|candidate| state.token.matches(candidate.trim()));
+    if bearer {
+        return Some(Principal::Local);
+    }
+    let cookie = jar.get(SESSION_COOKIE)?;
+    match &state.mode {
+        Mode::Single => state
+            .token
+            .verify_session(cookie.value())
+            .then_some(Principal::Local),
+        // Account sessions come with password sign-in.
+        Mode::Server(_) => None,
+    }
+}
+
+/// Middleware: every non-public request needs a valid session cookie or bearer token. The
+/// principal goes into the request's extensions for [`CurrentUser`].
+pub async fn require_session(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let principal = identify(&state, &jar, request.headers()).await;
+    let public = is_public(request.uri().path());
+    match principal {
+        Some(principal) => {
+            request.extensions_mut().insert(principal);
+            next.run(request).await
+        }
+        None if public => next.run(request).await,
+        None => ApiError::unauthorized("sign in to Open Prism first").into_response(),
+    }
+}
+
+/// The principal of a request that passed [`require_session`].
+#[derive(Debug, Clone)]
+pub struct CurrentUser(pub Principal);
+
+impl<S: Send + Sync> FromRequestParts<S> for CurrentUser {
+    type Rejection = ApiError;
+
+    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+        parts
+            .extensions
+            .get::<Principal>()
+            .cloned()
+            .map(Self)
+            .ok_or_else(|| ApiError::unauthorized("sign in to Open Prism first"))
+    }
 }
 
 #[cfg(test)]
