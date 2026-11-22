@@ -1,0 +1,7 @@
+# Caddy in front of Open Prism (compose.server.yaml): HTTPS for OPENPRISM_DOMAIN, with a
+# certificate from Let's Encrypt. For `localhost`, Caddy uses its own local authority instead
+# (`tls internal`), which is enough to try server mode on one machine.
+{$OPENPRISM_DOMAIN} {
+	# Live updates are server-sent events: Caddy passes them on as they come.
+	reverse_proxy open-prism:3737
+}

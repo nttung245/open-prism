@@ -94,8 +94,14 @@ impl Compiler {
         }
     }
 
-    /// Starts compiling `project` in the background and returns the run id.
-    pub fn start(&self, state: &AppState, project: &Project) -> Result<String, ApiError> {
+    /// Starts compiling `project` in the background and returns the run id. `author` (server
+    /// mode) is recorded with the `compiled` snapshot.
+    pub fn start(
+        &self,
+        state: &AppState,
+        project: &Project,
+        author: Option<&str>,
+    ) -> Result<String, ApiError> {
         let main_file = RelPath::parse(&project.main_file)?;
         let run_id = Uuid::now_v7().to_string();
         let cancel = CancellationToken::new();
@@ -124,6 +130,7 @@ impl Compiler {
         };
         let state = state.clone();
         let project_id = project.id.clone();
+        let author = author.map(str::to_owned);
         let id = run_id.clone();
         tokio::spawn(async move {
             // Wait for the previous run, which was just cancelled, to release the build dir.
@@ -146,7 +153,7 @@ impl Compiler {
             state
                 .events
                 .publish(&project_id, ProjectEvent::CompileFinished { result });
-            crate::history::after_compile(&state, &project_id, &finished).await;
+            crate::history::after_compile(&state, &project_id, &finished, author.as_deref()).await;
         });
         Ok(run_id)
     }

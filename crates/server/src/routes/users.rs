@@ -1,0 +1,353 @@
+//! Accounts, managed by admins (`user-accounts` spec). Server mode only.
+
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::routing::{get, patch, post};
+use axum::{Json, Router};
+use serde::{Deserialize, Serialize};
+use sqlx::Row;
+use ts_rs::TS;
+
+use crate::auth::{CurrentUser, Principal};
+use crate::db::now_ms;
+use crate::error::ApiError;
+use crate::links;
+use crate::members::{self, ProjectRole};
+use crate::routes::auth::check_display_name;
+use crate::routes::members::{MemberView, announce, members_of, set_owner};
+use crate::state::AppState;
+use crate::users::{self, UserRole};
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/users", get(list).post(create))
+        .route("/users/{id}", patch(update))
+        .route("/users/{id}/link", post(new_link))
+        .route("/users/{id}/projects", get(projects_of))
+        .route("/users/{id}/projects/{project_id}/owner", post(hand_over))
+}
+
+/// An account, as admins see it.
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UserView {
+    pub id: String,
+    pub username: String,
+    pub display_name: String,
+    pub role: UserRole,
+    pub disabled: bool,
+    /// False until the person opens their link and sets a password.
+    pub has_password: bool,
+    pub created_at: i64,
+    pub last_login_at: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct CreateUserRequest {
+    pub username: String,
+    pub display_name: String,
+    pub role: UserRole,
+}
+
+/// A new account and the one-time link to send to its owner.
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UserWithLink {
+    pub user: UserView,
+    /// Opens a page where the person sets their password; works once, for 7 days.
+    pub link: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UpdateUserRequest {
+    #[serde(default)]
+    #[ts(optional)]
+    pub role: Option<UserRole>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub disabled: Option<bool>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub display_name: Option<String>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export)]
+pub struct LinkResponse {
+    pub link: String,
+}
+
+/// A project someone is in, as admins see it (to hand over the projects of a locked account).
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UserProjectView {
+    pub id: String,
+    pub name: String,
+    pub role: ProjectRole,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HandOverRequest {
+    /// The new owner: an account that is not locked.
+    pub user_id: String,
+}
+
+/// Admins (and scripts with the token) only, in server mode.
+pub(crate) fn require_admin(state: &AppState, principal: &Principal) -> Result<(), ApiError> {
+    if !state.mode.is_server() {
+        return Err(ApiError::not_found(
+            "accounts exist in server mode only (--mode server)",
+        ));
+    }
+    if !principal.is_admin() {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "admins_only",
+            "only an admin can do this",
+        ));
+    }
+    Ok(())
+}
+
+fn view(record: users::UserRecord) -> UserView {
+    UserView {
+        id: record.user.id,
+        username: record.user.username,
+        display_name: record.user.display_name,
+        role: record.user.role,
+        disabled: record.disabled,
+        has_password: record.password_hash.is_some(),
+        created_at: record.created_at,
+        last_login_at: record.last_login_at,
+    }
+}
+
+fn link_to(state: &AppState, token: &str) -> String {
+    state
+        .mode
+        .server()
+        .map(|server| server.public_url.link(&format!("/setup/{token}")))
+        .unwrap_or_default()
+}
+
+async fn list(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+) -> Result<Json<Vec<UserView>>, ApiError> {
+    require_admin(&state, &principal)?;
+    let ids: Vec<String> = sqlx::query("SELECT id FROM users ORDER BY username COLLATE NOCASE")
+        .fetch_all(&state.db)
+        .await?
+        .iter()
+        .map(|row| row.try_get("id"))
+        .collect::<Result<_, _>>()?;
+    let mut views = Vec::with_capacity(ids.len());
+    for id in ids {
+        if let Some(record) = users::get(&state.db, &id).await? {
+            views.push(view(record));
+        }
+    }
+    Ok(Json(views))
+}
+
+async fn create(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Json(body): Json<CreateUserRequest>,
+) -> Result<(StatusCode, Json<UserWithLink>), ApiError> {
+    require_admin(&state, &principal)?;
+    let username = body.username.trim();
+    users::check_username(username).map_err(ApiError::bad_request)?;
+    let display_name = check_display_name(&body.display_name)?;
+    if users::find_by_username(&state.db, username)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::conflict(
+            "username_taken",
+            format!("the user name {username} is taken"),
+        ));
+    }
+    let now = now_ms();
+    let user = users::create(&state.db, username, &display_name, body.role, now).await?;
+    let token = links::set_password(&state.db, &user.id, now)
+        .await
+        .map_err(ApiError::internal)?;
+    let record = users::get(&state.db, &user.id)
+        .await?
+        .ok_or_else(|| ApiError::internal("the new account vanished"))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(UserWithLink {
+            user: view(record),
+            link: link_to(&state, &token),
+        }),
+    ))
+}
+
+async fn update(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Path(id): Path<String>,
+    Json(body): Json<UpdateUserRequest>,
+) -> Result<Json<UserView>, ApiError> {
+    require_admin(&state, &principal)?;
+    let mut tx = state.db.begin().await?;
+    let exists: Option<String> = sqlx::query_scalar("SELECT id FROM users WHERE id = ?")
+        .bind(&id)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if exists.is_none() {
+        return Err(ApiError::not_found("no such user"));
+    }
+    if let Some(role) = body.role {
+        sqlx::query("UPDATE users SET role = ? WHERE id = ?")
+            .bind(role.as_str())
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(disabled) = body.disabled {
+        sqlx::query("UPDATE users SET disabled = ? WHERE id = ?")
+            .bind(disabled)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(name) = &body.display_name {
+        sqlx::query("UPDATE users SET display_name = ? WHERE id = ?")
+            .bind(check_display_name(name)?)
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    // Checked after the change, inside the transaction, so two admins demoting each other at
+    // once cannot both succeed.
+    let admins: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin' AND disabled = 0")
+            .fetch_one(&mut *tx)
+            .await?;
+    if admins == 0 {
+        return Err(ApiError::conflict(
+            "last_admin",
+            "the server needs at least one admin who is not locked",
+        ));
+    }
+    if body.disabled == Some(true) {
+        // A locked account loses every session at once.
+        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(&id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    let record = users::get(&state.db, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    Ok(Json(view(record)))
+}
+
+/// A new set-password link for an account (lost link, forgotten password); older links stop
+/// working.
+async fn new_link(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Json<LinkResponse>, ApiError> {
+    require_admin(&state, &principal)?;
+    let record = users::get(&state.db, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    if record.disabled {
+        return Err(ApiError::conflict(
+            "user_locked",
+            "unlock the account first",
+        ));
+    }
+    let token = links::set_password(&state.db, &id, now_ms())
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(LinkResponse {
+        link: link_to(&state, &token),
+    }))
+}
+
+/// The projects an account is in. Admins read it to hand over the projects of a locked account.
+async fn projects_of(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<UserProjectView>>, ApiError> {
+    require_admin(&state, &principal)?;
+    users::get(&state.db, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    let rows = sqlx::query(
+        "SELECT p.id, p.name, p.updated_at, m.role
+         FROM project_members m JOIN projects p ON p.id = m.project_id
+         WHERE m.user_id = ?
+         ORDER BY p.updated_at DESC",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await?;
+    let views = rows
+        .iter()
+        .map(|row| {
+            let role: String = row.try_get("role")?;
+            Ok(UserProjectView {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                role: ProjectRole::parse(&role).unwrap_or(ProjectRole::Member),
+                updated_at: row.try_get("updated_at")?,
+            })
+        })
+        .collect::<Result<_, sqlx::Error>>()?;
+    Ok(Json(views))
+}
+
+/// An admin hands a project of a locked account to someone else: the only way an admin acts on
+/// a project they are not in (`project-access` spec). The new owner is added if needed.
+async fn hand_over(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Path((id, project_id)): Path<(String, String)>,
+    Json(body): Json<HandOverRequest>,
+) -> Result<Json<Vec<MemberView>>, ApiError> {
+    require_admin(&state, &principal)?;
+    let owner = users::get(&state.db, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    if members::role_of(&state.db, &project_id, &id).await? != Some(ProjectRole::Owner) {
+        return Err(ApiError::not_found(
+            "this account does not own that project",
+        ));
+    }
+    if !owner.disabled {
+        return Err(ApiError::conflict(
+            "owner_active",
+            "the owner can hand the project over themselves; an admin does it only for a locked account",
+        ));
+    }
+    let target = users::get(&state.db, &body.user_id)
+        .await?
+        .filter(|record| !record.disabled)
+        .ok_or_else(|| {
+            ApiError::bad_request("the new owner must be an account that is not locked")
+        })?;
+    let previous = set_owner(&state, &project_id, &target.user.id).await?;
+    let mut affected = vec![target.user.id];
+    affected.extend(previous);
+    announce(&state, &project_id, affected, Vec::new());
+    Ok(Json(members_of(&state, &project_id).await?))
+}

@@ -12,6 +12,7 @@ use openprism_core::pdf_pages::{MAX_PDF_BYTES, parse_pages};
 use openprism_core::pdf_render::PdfDocument;
 use tokio::io::AsyncWriteExt;
 
+use crate::auth::CurrentUser;
 use crate::error::ApiError;
 use crate::jobs::pdf_import::{KIND, PdfImportParams};
 use crate::jobs::{self, store::JobView};
@@ -34,6 +35,7 @@ pub fn routes() -> Router<AppState> {
 /// `pages` (such as `1-5, 8`; every page when absent).
 async fn import_pdf(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<JobView>), ApiError> {
     let mut name: Option<String> = None;
@@ -66,15 +68,18 @@ async fn import_pdf(
 
     // Checked once the upload is read: a reply sent while the browser is still sending the file
     // breaks the connection, and the page would show a network error instead of this message.
-    let model = settings::roles(&state).await?.agent.ok_or_else(|| {
-        ApiError::new(
-            StatusCode::BAD_REQUEST,
-            // The page shows a link to Settings for this code.
-            "no_model",
-            "choose a model for Agent in Settings first: importing a PDF has the Agent read \
+    let model = settings::roles_for(&state, principal.user_id())
+        .await?
+        .agent
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                // The page shows a link to Settings for this code.
+                "no_model",
+                "choose a model for Agent in Settings first: importing a PDF has the Agent read \
              every page",
-        )
-    })?;
+            )
+        })?;
 
     // A PDF Open Prism can read, and its number of pages.
     let path = temp.path().to_path_buf();
@@ -128,6 +133,7 @@ async fn import_pdf(
     let params = serde_json::to_value(params).map_err(ApiError::internal)?;
     let job = jobs::create_prepared(
         &state,
+        principal.user_id(),
         KIND,
         &format!("Import {file_name}"),
         &params,

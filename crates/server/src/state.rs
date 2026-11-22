@@ -11,6 +11,8 @@ use crate::chat::RunningTurns;
 use crate::compiler::Compiler;
 use crate::events::EventHub;
 use crate::jobs::Jobs;
+use crate::login_limit::LoginLimiter;
+use crate::mode::Mode;
 use crate::synctex_cache::SyncTexCache;
 
 /// Shared, read-mostly application state.
@@ -20,6 +22,10 @@ pub struct AppState(Arc<Inner>);
 #[derive(Debug)]
 pub struct Inner {
     pub token: AccessToken,
+    /// Single-user (the default) or server mode.
+    pub mode: Mode,
+    /// Failed sign-ins in server mode.
+    pub login_limit: LoginLimiter,
     /// TeX toolchains found at startup.
     pub engines: Vec<EngineInfo>,
     pub paths: DataPaths,
@@ -132,7 +138,18 @@ impl DataPaths {
 }
 
 impl AppState {
+    /// Opens the state in single-user mode.
+    #[cfg(test)]
     pub async fn open(
+        data_dir: &Path,
+        token: AccessToken,
+        engines: Vec<EngineInfo>,
+    ) -> anyhow::Result<Self> {
+        Self::open_in(Mode::Single, data_dir, token, engines).await
+    }
+
+    pub async fn open_in(
+        mode: Mode,
         data_dir: &Path,
         token: AccessToken,
         engines: Vec<EngineInfo>,
@@ -141,6 +158,8 @@ impl AppState {
         let db = crate::db::open(&paths.database).await?;
         let state = Self(Arc::new(Inner {
             token,
+            mode,
+            login_limit: LoginLimiter::default(),
             compiler: Compiler::new(engines.clone()),
             engines,
             paths,

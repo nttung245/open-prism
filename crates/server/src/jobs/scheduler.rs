@@ -87,6 +87,8 @@ pub struct JobContext {
     pub state: AppState,
     /// Cancelled when the user cancels the job or the app stops.
     pub cancel: CancellationToken,
+    /// Who started the job (server mode): what it creates is theirs.
+    pub user_id: Option<String>,
 }
 impl JobContext {
     /// Says what the job is doing, for display.
@@ -194,9 +196,10 @@ pub async fn create(
         return Err(ApiError::internal(format!("unknown job kind {kind:?}")));
     }
     let job = store::create(&state.db, kind, title, params).await?;
-    state
-        .events
-        .publish_app(AppEvent::JobChanged { job: job.clone() });
+    state.events.publish_app(AppEvent::JobChanged {
+        job: job.clone(),
+        owner: None,
+    });
     state.jobs.wake.notify_one();
     Ok(job)
 }
@@ -206,6 +209,7 @@ pub async fn create(
 /// after `prepare` succeeded. When `prepare` fails there is no job and no directory.
 pub async fn create_prepared<F>(
     state: &AppState,
+    user_id: Option<&str>,
     kind: &str,
     title: &str,
     params: &serde_json::Value,
@@ -218,7 +222,7 @@ where
         return Err(ApiError::internal(format!("unknown job kind {kind:?}")));
     }
     let mut tx = state.db.begin().await?;
-    let id = store::insert(&mut *tx, kind, title, params).await?;
+    let id = store::insert(&mut *tx, kind, title, params, user_id).await?;
     let dir = state.paths.job_dir(&id);
     let target = dir.clone();
     let prepared = tokio::task::spawn_blocking(move || {
@@ -235,9 +239,10 @@ where
     }
     tx.commit().await?;
     let job = view_or_404(state, &id).await?;
-    state
-        .events
-        .publish_app(AppEvent::JobChanged { job: job.clone() });
+    state.events.publish_app(AppEvent::JobChanged {
+        job: job.clone(),
+        owner: user_id.map(str::to_owned),
+    });
     state.jobs.wake.notify_one();
     Ok(job)
 }
@@ -279,6 +284,10 @@ pub async fn retry(state: &AppState, id: &str) -> Result<JobView, ApiError> {
 
 /// Deletes a finished job and its files.
 pub async fn delete(state: &AppState, id: &str) -> Result<(), ApiError> {
+    let owner = store::get(&state.db, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such job"))?
+        .user_id;
     if !store::delete_finished(&state.db, id).await? {
         return Err(match store::view(&state.db, id).await? {
             None => ApiError::not_found("no such job"),
@@ -286,9 +295,10 @@ pub async fn delete(state: &AppState, id: &str) -> Result<(), ApiError> {
         });
     }
     super::remove_dir(&state.paths.job_dir(id)).await;
-    state
-        .events
-        .publish_app(AppEvent::JobRemoved { id: id.to_owned() });
+    state.events.publish_app(AppEvent::JobRemoved {
+        id: id.to_owned(),
+        owner,
+    });
     Ok(())
 }
 
@@ -300,8 +310,11 @@ async fn view_or_404(state: &AppState, id: &str) -> Result<JobView, ApiError> {
 
 /// Tells every open page about the job's new state.
 pub(super) async fn publish_changed(state: &AppState, id: &str) {
-    match store::view(&state.db, id).await {
-        Ok(Some(job)) => state.events.publish_app(AppEvent::JobChanged { job }),
+    match store::get(&state.db, id).await {
+        Ok(Some(row)) => state.events.publish_app(AppEvent::JobChanged {
+            job: row.view,
+            owner: row.user_id,
+        }),
         Ok(None) => {}
         Err(err) => tracing::warn!(%err, job = %id, "cannot read a job to publish it"),
     }
@@ -370,6 +383,7 @@ async fn run_job(state: &AppState, job: store::JobRow, shutdown: &CancellationTo
                 dir: state.paths.job_dir(&id),
                 state: state.clone(),
                 cancel: cancel.clone(),
+                user_id: job.user_id.clone(),
             };
             drive(kind, ctx, job.view.steps_total.is_none()).await
         }

@@ -1,0 +1,43 @@
+# Open Prism for a group (server mode), behind Caddy, which gets the HTTPS certificate.
+#
+#   OPENPRISM_DOMAIN=prism.example.org docker compose -f compose.server.yaml up -d
+#   docker compose -f compose.server.yaml logs open-prism    # the link that creates the first admin
+#
+# The domain must point at this machine, with ports 80 and 443 open to the people who use it.
+# Open Prism itself publishes no port: only Caddy reaches it, on the network of this file.
+# Accounts, projects and settings live in the `open-prism-data` volume. See "Server mode" in
+# README.md.
+name: open-prism-server
+
+services:
+  open-prism:
+    image: ${OPENPRISM_IMAGE:-ghcr.io/nttung245/open-prism:latest}
+    init: true
+    environment:
+      OPENPRISM_MODE: server
+      OPENPRISM_PUBLIC_URL: https://${OPENPRISM_DOMAIN:?set OPENPRISM_DOMAIN to the address people open, such as prism.example.org}
+    volumes:
+      - open-prism-data:/data
+    restart: unless-stopped
+
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      OPENPRISM_DOMAIN: ${OPENPRISM_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - open-prism
+    restart: unless-stopped
+
+volumes:
+  open-prism-data:
+  # Caddy's certificates and keys: keep it, or Caddy asks for new certificates at every start.
+  caddy-data:
+  caddy-config:

@@ -5,6 +5,8 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 use openprism_core::engines::DEFAULT_DOCKER_IMAGE;
 
+use crate::mode::{Mode, ModeArg};
+
 /// Open Prism API server. Listens on 127.0.0.1 only; the Next.js app is the public entry point.
 #[derive(Debug, Parser)]
 #[command(name = "open-prism-api", version, about)]
@@ -23,6 +25,21 @@ pub struct Args {
     #[arg(long, env = "OPENPRISM_TEX_IMAGE", default_value = DEFAULT_DOCKER_IMAGE, global = true)]
     pub tex_image: String,
 
+    /// `single` (default): one user on this computer, signed in with the access token.
+    /// `server`: accounts and passwords for several people, behind `--public-url`.
+    #[arg(long, env = "OPENPRISM_MODE", value_enum, default_value_t = ModeArg::Single, global = true)]
+    pub mode: ModeArg,
+
+    /// Server mode: the https:// address people open, such as https://prism.example.org.
+    /// Sign-in and invitation links use it, and write requests must come from it.
+    #[arg(long, env = "OPENPRISM_PUBLIC_URL", value_name = "URL", global = true)]
+    pub public_url: Option<String>,
+
+    /// Server mode: allow an http:// public URL, for a test on a network you trust. Passwords
+    /// and session cookies then travel unencrypted.
+    #[arg(long, env = "OPENPRISM_INSECURE_HTTP", global = true)]
+    pub insecure_http: bool,
+
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -33,6 +50,27 @@ pub enum Command {
     Serve(ServeArgs),
     /// Print the access token used to sign in (creates it if needed).
     PrintToken,
+    /// Manage the accounts of server mode (needs --mode server and --public-url, as for serve).
+    User {
+        #[command(subcommand)]
+        action: UserCommand,
+    },
+}
+
+/// `open-prism-api user …`. Passwords are never arguments: the commands print one-time links.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum UserCommand {
+    /// List the accounts.
+    List,
+    /// Print a one-time link that sets a new password for an account.
+    ResetPassword { username: String },
+    /// Create an admin and print a one-time link that sets its password.
+    CreateAdmin {
+        username: String,
+        /// The name others see; the user name by default.
+        #[arg(long)]
+        display_name: Option<String>,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -93,6 +131,11 @@ impl Args {
     pub fn docker_image(&self) -> Option<String> {
         let image = self.tex_image.trim();
         (!image.is_empty() && !image.eq_ignore_ascii_case("none")).then(|| image.to_owned())
+    }
+
+    /// The mode, after checking `--mode`, `--public-url` and `--insecure-http` together.
+    pub fn mode(&self) -> Result<Mode, String> {
+        Mode::resolve(self.mode, self.public_url.as_deref(), self.insecure_http)
     }
 
     pub fn resolve_data_dir(&self) -> anyhow::Result<PathBuf> {
@@ -220,6 +263,67 @@ mod tests {
             parse(&["print-token"]).command,
             Some(Command::PrintToken)
         ));
+    }
+
+    #[test]
+    fn mode_flags_go_before_or_after_the_command() {
+        if std::env::var_os("OPENPRISM_MODE").is_none()
+            && std::env::var_os("OPENPRISM_PUBLIC_URL").is_none()
+        {
+            assert_eq!(parse(&["serve"]).mode(), Ok(Mode::Single));
+            let err = parse(&["serve", "--mode", "server"]).mode().unwrap_err();
+            assert!(err.contains("needs --public-url"), "{err}");
+        }
+        let args = parse(&[
+            "--mode",
+            "server",
+            "serve",
+            "--public-url",
+            "https://prism.example.org",
+        ]);
+        assert!(args.mode().unwrap().is_server());
+        let args = parse(&[
+            "serve",
+            "--mode",
+            "server",
+            "--public-url",
+            "http://192.168.1.5:3737",
+        ]);
+        assert!(args.mode().unwrap_err().contains("needs HTTPS"));
+        assert!(
+            parse(&[
+                "serve",
+                "--mode",
+                "server",
+                "--public-url",
+                "http://192.168.1.5:3737",
+                "--insecure-http",
+            ])
+            .mode()
+            .is_ok()
+        );
+        assert!(Args::try_parse_from(["open-prism-api", "--mode", "cluster"]).is_err());
+    }
+
+    #[test]
+    fn user_commands_take_no_password() {
+        assert!(matches!(
+            parse(&["user", "reset-password", "lan"]).command,
+            Some(Command::User {
+                action: UserCommand::ResetPassword { .. }
+            })
+        ));
+        assert!(matches!(
+            parse(&["user", "create-admin", "lan", "--display-name", "Lan Tran"]).command,
+            Some(Command::User {
+                action: UserCommand::CreateAdmin { .. }
+            })
+        ));
+        for extra in [&["--password", "secret12345"][..], &["secret12345"][..]] {
+            let mut args = vec!["open-prism-api", "user", "reset-password", "lan"];
+            args.extend(extra);
+            assert!(Args::try_parse_from(args).is_err(), "{extra:?}");
+        }
     }
 
     #[test]

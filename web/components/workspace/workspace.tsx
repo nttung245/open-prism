@@ -24,6 +24,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
+import { UserMenu } from "@/components/account/user-menu";
 import {
   type AssistantHandle,
   AssistantPanel,
@@ -38,6 +39,7 @@ import {
 } from "@/components/assistant/inline-actions";
 import { SuggestionsToggle } from "@/components/editor/suggestions-toggle";
 import { HistoryPanel } from "@/components/history/history-panel";
+import { MembersButton } from "@/components/projects/members-dialog";
 import { Button, IconButton } from "@/components/ui/button";
 import { DownloadMenu } from "@/components/ui/download-menu";
 import { addImages, type DraftImage, MAX_IMAGES } from "@/lib/ai/images";
@@ -70,6 +72,7 @@ import {
   joinPath,
   validateName,
 } from "@/lib/files/paths";
+import { fetchMembers, membersKey } from "@/lib/members";
 import { centre, type Rect } from "@/lib/pdf/capture";
 import { DocumentStore, httpTransport } from "@/lib/workspace/documents";
 import {
@@ -124,6 +127,8 @@ export default function Workspace({
   const nodes = useMemo(() => buildTree(tree.data?.entries ?? []), [tree.data]);
 
   const [notice, setNotice] = useState<string | null>(null);
+  // Server mode: someone removed this person from the project while it was open.
+  const [lostAccess, setLostAccess] = useState(false);
   // The right-hand panel shows the assistant or the history, never both.
   const [sidebar, setSidebar] = useState<Sidebar>(null);
   const assistantOpen = sidebar === "assistant";
@@ -606,6 +611,21 @@ export default function Workspace({
       case "historyChanged":
         void queryClient.invalidateQueries({ queryKey: ["history", id] });
         break;
+      case "membersChanged":
+        // The stream of someone removed ends after this event; the list says whether it was us.
+        queryClient
+          .fetchQuery({
+            queryKey: membersKey(id),
+            queryFn: () => fetchMembers(id),
+            // Always ask: a cached list from seconds ago is exactly what changed.
+            staleTime: 0,
+          })
+          .catch((error: unknown) => {
+            if (error instanceof ApiError && error.status === 404) {
+              setLostAccess(true);
+            }
+          });
+        break;
       case "resync":
         void queryClient.invalidateQueries({ queryKey: ["tree", id] });
         void queryClient.invalidateQueries({
@@ -620,23 +640,23 @@ export default function Workspace({
   // connection, or when this page is shown again) may have missed events. It outlives the
   // effect, which Next.js cleans up while the page is hidden.
   const eventsOpened = useRef<string | null>(null);
-  useEffect(
-    () =>
-      openEventStream(`/api/projects/${id}/events`, {
-        onMessage: (data) => {
-          try {
-            onEvent.current(JSON.parse(data) as ProjectEvent);
-          } catch {
-            // Ignore malformed events.
-          }
-        },
-        onOpen: () => {
-          if (eventsOpened.current === id) onEvent.current({ type: "resync" });
-          eventsOpened.current = id;
-        },
-      }),
-    [id],
-  );
+  useEffect(() => {
+    // Removed from the project: its stream answers 404 from now on.
+    if (lostAccess) return;
+    return openEventStream(`/api/projects/${id}/events`, {
+      onMessage: (data) => {
+        try {
+          onEvent.current(JSON.parse(data) as ProjectEvent);
+        } catch {
+          // Ignore malformed events.
+        }
+      },
+      onOpen: () => {
+        if (eventsOpened.current === id) onEvent.current({ type: "resync" });
+        eventsOpened.current = id;
+      },
+    });
+  }, [id, lostAccess]);
 
   // Global shortcuts (also when the editor is not focused) and unsaved-changes guard.
   useEffect(() => {
@@ -895,7 +915,24 @@ export default function Workspace({
           <Settings className="size-4" />
         </Link>
         <DownloadMenu projectId={id} />
+        <MembersButton projectId={id} projectName={project.name} />
+        <UserMenu compact />
       </header>
+
+      {lostAccess && (
+        <div
+          role="alert"
+          className="flex items-center gap-3 border-b border-danger/40 bg-red-50 px-3 py-2 text-sm text-danger dark:bg-red-950/40"
+        >
+          <span className="flex-1">
+            You are no longer a member of this project: it was removed from your
+            list, and changes you make here are not saved.
+          </span>
+          <Link href="/" className="font-medium underline">
+            All projects
+          </Link>
+        </div>
+      )}
 
       {notice && (
         <output className="flex items-center gap-2 border-b border-border bg-accent-soft/60 px-3 py-1.5 text-xs">

@@ -151,6 +151,7 @@ async fn commits_without_metadata_are_picked_up() {
                 summary: "Compiled successfully",
                 force: false,
                 max_file_bytes: MAX_FILE_BYTES,
+                author: None,
             },
         )
         .unwrap()
@@ -455,17 +456,17 @@ async fn successful_compiles_are_snapshotted_at_most_every_ten_minutes() {
 
     for status in ["failed", "cancelled", "timedOut"] {
         put(&app, &id, "main.tex", status).await;
-        crate::history::after_compile(&app.state, &id, &compile_result(status)).await;
+        crate::history::after_compile(&app.state, &id, &compile_result(status), None).await;
     }
     assert_eq!(compiled(&timeline(&app, &id).await), 0);
 
-    crate::history::after_compile(&app.state, &id, &compile_result("success")).await;
+    crate::history::after_compile(&app.state, &id, &compile_result("success"), None).await;
     let all = timeline(&app, &id).await;
     assert_eq!(compiled(&all), 1);
     assert_eq!(all[0]["summary"], "Compiled successfully");
 
     put(&app, &id, "main.tex", "changed again").await;
-    crate::history::after_compile(&app.state, &id, &compile_result("success")).await;
+    crate::history::after_compile(&app.state, &id, &compile_result("success"), None).await;
     assert_eq!(compiled(&timeline(&app, &id).await), 1);
 
     // Ten minutes later another one is taken.
@@ -474,7 +475,7 @@ async fn successful_compiles_are_snapshotted_at_most_every_ten_minutes() {
         .execute(&app.state.db)
         .await
         .unwrap();
-    crate::history::after_compile(&app.state, &id, &compile_result("success")).await;
+    crate::history::after_compile(&app.state, &id, &compile_result("success"), None).await;
     assert_eq!(compiled(&timeline(&app, &id).await), 2);
 }
 
@@ -488,7 +489,7 @@ async fn a_broken_history_does_not_break_compiles() {
 
     put(&app, &id, "main.tex", "changed").await;
     // Returns normally, only logs.
-    crate::history::after_compile(&app.state, &id, &compile_result("success")).await;
+    crate::history::after_compile(&app.state, &id, &compile_result("success"), None).await;
     let rows: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM snapshots WHERE project_id = ? AND kind = 'compiled'",
     )
@@ -497,4 +498,31 @@ async fn a_broken_history_does_not_break_compiles() {
     .await
     .unwrap();
     assert_eq!(rows, 0);
+}
+
+#[tokio::test]
+async fn a_project_never_snapshotted_has_an_empty_timeline() {
+    let app = TestApp::new(Vec::new()).await;
+    // A project from before version history, with files but no snapshot.
+    let id = uuid::Uuid::now_v7().to_string();
+    let now = crate::db::now_ms();
+    sqlx::query(
+        "INSERT INTO projects (id, name, main_file, created_at, updated_at)
+         VALUES (?, 'Old paper', 'main.tex', ?, ?)",
+    )
+    .bind(&id)
+    .bind(now)
+    .bind(now)
+    .execute(&app.state.db)
+    .await
+    .unwrap();
+    let dir = app.state.paths.project_dir(&id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("main.tex"), "x").unwrap();
+
+    let reply = app
+        .call(Method::GET, &format!("/api/projects/{id}/history"), None)
+        .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.json(), json!({ "snapshots": [], "nextBefore": null }));
 }

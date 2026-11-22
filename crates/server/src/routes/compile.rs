@@ -21,6 +21,7 @@ use tower_http::services::ServeFile;
 use crate::compiler::{self, CompileResult, CompileStarted};
 use crate::error::ApiError;
 use crate::events::ProjectEvent;
+use crate::members::ProjectAccess;
 use crate::projects;
 use crate::routes::projects::content_disposition;
 use crate::state::AppState;
@@ -37,10 +38,12 @@ pub fn routes() -> Router<AppState> {
 
 async fn start(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, principal, .. }: ProjectAccess,
 ) -> Result<(StatusCode, Json<CompileStarted>), ApiError> {
     let project = projects::get(&state, &id).await?;
-    let run_id = state.compiler.start(&state, &project)?;
+    let run_id = state
+        .compiler
+        .start(&state, &project, principal.user_id())?;
     projects::touch(&state, &id).await?;
     Ok((StatusCode::ACCEPTED, Json(CompileStarted { run_id })))
 }
@@ -48,7 +51,7 @@ async fn start(
 /// The newest finished compilation, or `null` if the project was never compiled.
 async fn latest(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
 ) -> Result<Json<Option<CompileResult>>, ApiError> {
     projects::get(&state, &id).await?;
     Ok(Json(compiler::latest(&state, &id).await?))
@@ -56,6 +59,7 @@ async fn latest(
 
 async fn show(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, run_id)): Path<(String, String)>,
 ) -> Result<Json<CompileResult>, ApiError> {
     projects::get(&state, &id).await?;
@@ -66,6 +70,7 @@ async fn show(
 /// answers range requests, which pdf.js uses to load large PDFs progressively.
 async fn output(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, run_id, file)): Path<(String, String, String)>,
     request: Request,
 ) -> Result<Response, ApiError> {
@@ -108,6 +113,7 @@ struct PagesQuery {
 /// never changes, so it may be cached for good.
 async fn pages(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, run_id)): Path<(String, String)>,
     Query(query): Query<PagesQuery>,
 ) -> Result<Response, ApiError> {
@@ -169,20 +175,31 @@ async fn pages(
         .into_response())
 }
 
-/// Server-sent events of one project: file changes and compilations (`ProjectEvent` JSON).
+/// Server-sent events of one project: file changes and compilations (`ProjectEvent` JSON). The
+/// stream of someone removed from the project ends right after the `membersChanged` event.
 async fn events(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    access: ProjectAccess,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    projects::get(&state, &id).await?;
-    let stream = BroadcastStream::new(state.events.subscribe(&id)).map(|item| {
-        let event = match item {
-            Ok(event) => event,
-            Err(BroadcastStreamRecvError::Lagged(_)) => ProjectEvent::Resync,
-        };
-        Ok(Event::default()
-            .json_data(&event)
-            .unwrap_or_else(|_| Event::default().comment("unserialisable event")))
+    projects::get(&state, &access.id).await?;
+    let me = access.principal.user_id().map(str::to_owned);
+    let events = BroadcastStream::new(state.events.subscribe(&access.id));
+    let stream = futures_util::stream::unfold((events, false), move |(mut events, ended)| {
+        let me = me.clone();
+        async move {
+            if ended {
+                return None;
+            }
+            let event = match events.next().await? {
+                Ok(event) => event,
+                Err(BroadcastStreamRecvError::Lagged(_)) => ProjectEvent::Resync,
+            };
+            let last = me.as_deref().is_some_and(|me| event.ends_stream_of(me));
+            let sse = Event::default()
+                .json_data(&event)
+                .unwrap_or_else(|_| Event::default().comment("unserialisable event"));
+            Some((Ok(sse), (events, last)))
+        }
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }

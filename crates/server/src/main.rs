@@ -10,11 +10,19 @@ mod history;
 mod image_latex;
 mod images;
 mod jobs;
+mod links;
+mod login_limit;
+mod members;
+mod mode;
+mod passwords;
 mod projects;
 mod routes;
+mod sessions;
 mod settings;
 mod state;
 mod synctex_cache;
+mod user_cli;
+mod users;
 mod web;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -45,6 +53,19 @@ async fn main() -> anyhow::Result<()> {
     nix::sys::stat::umask(nix::sys::stat::Mode::from_bits_truncate(0o077));
 
     let args = cli::Args::parse();
+    // Check the mode flags before anything else: a server-mode mistake must stop here.
+    let mode = args.mode().map_err(anyhow::Error::msg)?;
+    let serving = matches!(args.command, None | Some(Command::Serve(_)));
+    if let Some(server) = mode.server().filter(|_| serving) {
+        tracing::info!(public_url = %server.public_url, "server mode: accounts and passwords");
+        if server.insecure_http {
+            tracing::warn!(
+                public_url = %server.public_url,
+                "--insecure-http: passwords and session cookies travel unencrypted. Use this only \
+                 for a test on a network you trust, never on the Internet"
+            );
+        }
+    }
     // `serve --web`: fail on a missing build or Node before starting anything.
     let web_options = args.web();
     let web_dir = match &web_options {
@@ -67,6 +88,10 @@ async fn main() -> anyhow::Result<()> {
         println!("{}", token.expose());
         return Ok(());
     }
+    if let Some(Command::User { action }) = &args.command {
+        println!("{}", user_cli::run(&data_dir, &mode, action).await?);
+        return Ok(());
+    }
     let sign_in_token = token.expose().to_owned();
 
     // `serve --web --open` again while Open Prism runs (a second click on its menu entry):
@@ -76,10 +101,13 @@ async fn main() -> anyhow::Result<()> {
         && (web::port_in_use(args.port) || web::port_in_use(options.port))
         && web::is_open_prism(options.port).await
     {
-        let link = web::sign_in_link(
-            &format!("http://127.0.0.1:{}", options.port),
-            &sign_in_token,
-        );
+        let link = match mode.server() {
+            Some(server) => server.public_url.link("/login"),
+            None => web::sign_in_link(
+                &format!("http://127.0.0.1:{}", options.port),
+                &sign_in_token,
+            ),
+        };
         println!("\n  Open Prism is already running. Open this link to sign in:\n  {link}\n");
         web::open_in_browser(&link).await;
         return Ok(());
@@ -101,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!(kind = ?engine.kind, runtime = ?engine.runtime, version = ?engine.version, "TeX engine");
     }
 
-    let state = AppState::open(&data_dir, token, engines).await?;
+    let state = AppState::open_in(mode.clone(), &data_dir, token, engines).await?;
     let _watcher = watch_files(&state)?;
     // Background jobs stop with the app; a job cut short resumes at the next start.
     let jobs_stop = tokio_util::sync::CancellationToken::new();
@@ -144,8 +172,12 @@ async fn serve(
     };
     tracing::info!(%addr, data_dir = %state.paths.root.display(), "open-prism-api listening");
 
+    let (link, message) = startup_link(&state, sign_in_token).await?;
     let (Some(options), Some(dir)) = (web_options, web_dir) else {
-        tracing::info!("sign in with the token from `open-prism-api print-token`");
+        match state.mode.server() {
+            Some(_) => tracing::info!(%link, "{message}"),
+            None => tracing::info!("sign in with the token from `open-prism-api print-token`"),
+        }
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown_signal())
             .await?;
@@ -162,8 +194,37 @@ async fn serve(
         );
     }
     let web = web::WebServer::next(options.node, dir, options.host, options.port, args.port);
-    let link = web::sign_in_link(&web.url(), sign_in_token);
-    run_with_web(listener, app, web, link, options.open).await
+    let link = match state.mode {
+        mode::Mode::Single => web::sign_in_link(&web.url(), sign_in_token),
+        mode::Mode::Server(_) => link,
+    };
+    run_with_web(listener, app, web, link, message, options.open).await
+}
+
+/// What to print once the web app is ready (`app-launch` spec): in single-user mode the
+/// sign-in link with the token; in server mode the first-admin link while there is no account,
+/// otherwise the sign-in page of the public address. Never the token in server mode.
+async fn startup_link(
+    state: &AppState,
+    sign_in_token: &str,
+) -> anyhow::Result<(String, &'static str)> {
+    let Some(server) = state.mode.server() else {
+        return Ok((
+            sign_in_token.to_owned(),
+            "Open Prism is running. Open this link to sign in:",
+        ));
+    };
+    match links::first_admin(&state.db, db::now_ms()).await? {
+        Some(token) => Ok((
+            server.public_url.link(&format!("/setup/{token}")),
+            "Open Prism is running in server mode with no account yet. Open this link to create \
+             the first admin (it works once, for 24 hours):",
+        )),
+        None => Ok((
+            server.public_url.link("/login"),
+            "Open Prism is running in server mode. Sign in at:",
+        )),
+    }
 }
 
 /// Serves the API with the web app next to it, until Ctrl+C / SIGTERM / SIGHUP or until one of
@@ -174,6 +235,7 @@ async fn run_with_web(
     app: axum::Router,
     web: web::WebServer,
     link: String,
+    message: &str,
     open: bool,
 ) -> anyhow::Result<()> {
     let api_stop = CancellationToken::new();
@@ -201,7 +263,7 @@ async fn run_with_web(
             result = &mut readied, if !announced => {
                 announced = true;
                 if result.is_ok() {
-                    println!("\n  Open Prism is running. Open this link to sign in:\n  {link}\n");
+                    println!("\n  {message}\n  {link}\n");
                     if open {
                         let link = link.clone();
                         tokio::spawn(async move { web::open_in_browser(&link).await });

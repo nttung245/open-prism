@@ -85,7 +85,11 @@ export function JobList({
   }, [finishedCount, onProjectsChanged]);
 
   useAppEvents((event) => {
-    if (event.type === "jobChanged" && event.job.state === "succeeded") {
+    if (
+      (event.type === "jobChanged" && event.job.state === "succeeded") ||
+      // Someone added this person to a project, or removed them from one.
+      event.type === "projectsChanged"
+    ) {
       onProjectsChanged();
     }
     const next = applyEvent(

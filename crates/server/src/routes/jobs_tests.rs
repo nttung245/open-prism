@@ -202,6 +202,7 @@ async fn a_listener_that_falls_behind_is_told_to_resync() {
     for n in 0..300 {
         app.state.events.publish_app(AppEvent::JobRemoved {
             id: format!("j{n}"),
+            owner: None,
         });
     }
     assert_eq!(slow.next().await["type"], "resync");
@@ -387,4 +388,117 @@ async fn compile_dir_reports_errors_with_their_line() {
         error.message.contains("Undefined control sequence"),
         "{error:?}"
     );
+}
+
+/// Server mode: a job is its creator's alone (`background-jobs` spec).
+#[tokio::test]
+async fn each_person_sees_and_hears_only_their_own_jobs() {
+    use super::accounts_tests::{TOKEN, account, call, get, server, sign_in};
+    use super::members_tests::{Stream, send};
+    use crate::users::UserRole;
+
+    let (app, state) = server().await;
+    // No scheduler: the jobs stay queued.
+    state
+        .jobs
+        .register(Arc::new(FakeKind::new(1, 1, Duration::ZERO)));
+    let lan = account(&state, "lan", UserRole::User, "lan's own password").await;
+    let minh = account(&state, "minh", UserRole::User, "minh's own password").await;
+    let lan_cookie = sign_in(&app, "lan", "lan's own password").await;
+    let minh_cookie = sign_in(&app, "minh", "minh's own password").await;
+    let mut lan_events = Stream::open(&app, "/api/events", &lan_cookie).await;
+    let mut minh_events = Stream::open(&app, "/api/events", &minh_cookie).await;
+
+    let start = |user: &str, title: &str| {
+        let (state, user, title) = (state.clone(), user.to_owned(), title.to_owned());
+        async move {
+            crate::jobs::create_prepared(
+                &state,
+                Some(&user),
+                "fake",
+                &title,
+                &json!({}),
+                |_| Ok(()),
+            )
+            .await
+            .unwrap()
+            .id
+        }
+    };
+    let lan_job = start(&lan.id, "Lan's import").await;
+    let minh_job = start(&minh.id, "Minh's import").await;
+
+    // Each stream hears about its own job only.
+    let wait = Duration::from_secs(5);
+    let heard = lan_events.next(wait).await.unwrap().unwrap();
+    assert_eq!(
+        (heard["type"].as_str(), heard["job"]["id"].as_str()),
+        (Some("jobChanged"), Some(lan_job.as_str()))
+    );
+    assert_eq!(lan_events.next(Duration::from_millis(300)).await, Err(()));
+    let heard = minh_events.next(wait).await.unwrap().unwrap();
+    assert_eq!(heard["job"]["id"], minh_job.as_str());
+    assert!(heard.get("owner").is_none(), "the owner is never sent");
+
+    // Each list holds its own job only; the access token sees both.
+    for (cookie, mine) in [(&lan_cookie, &lan_job), (&minh_cookie, &minh_job)] {
+        let listed = call(&app, get("/api/jobs", Some(cookie))).await;
+        let ids: Vec<&str> = listed
+            .json
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|job| job["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, [mine.as_str()]);
+    }
+    let all = call(
+        &app,
+        Request::get("/api/jobs")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(all.json.as_array().unwrap().len(), 2);
+
+    // Lan's job does not exist for Minh.
+    let job = |id: &str, path: &str| format!("/api/jobs/{id}{path}");
+    for request in [
+        get(&job(&lan_job, ""), Some(&minh_cookie)),
+        send(Method::POST, &job(&lan_job, "/cancel"), &minh_cookie, None),
+        send(Method::POST, &job(&lan_job, "/retry"), &minh_cookie, None),
+        send(Method::DELETE, &job(&lan_job, ""), &minh_cookie, None),
+    ] {
+        let path = format!("{} {}", request.method(), request.uri());
+        let reply = call(&app, request).await;
+        assert_eq!(
+            reply.status,
+            StatusCode::NOT_FOUND,
+            "{path}: {}",
+            reply.json
+        );
+    }
+    let still = call(&app, get(&job(&lan_job, ""), Some(&lan_cookie))).await;
+    assert_eq!(still.json["state"], "queued");
+
+    // Minh cancels his own; Lan hears nothing of it.
+    let cancelled = call(
+        &app,
+        send(Method::POST, &job(&minh_job, "/cancel"), &minh_cookie, None),
+    )
+    .await;
+    assert_eq!(cancelled.status, StatusCode::OK, "{}", cancelled.json);
+    assert_eq!(cancelled.json["state"], "cancelled");
+    let heard = minh_events.next(wait).await.unwrap().unwrap();
+    assert_eq!(heard["job"]["state"], "cancelled");
+    let deleted = call(
+        &app,
+        send(Method::DELETE, &job(&minh_job, ""), &minh_cookie, None),
+    )
+    .await;
+    assert_eq!(deleted.status, StatusCode::NO_CONTENT);
+    let heard = minh_events.next(wait).await.unwrap().unwrap();
+    assert_eq!(heard["type"], "jobRemoved");
+    assert_eq!(lan_events.next(Duration::from_millis(300)).await, Err(()));
 }

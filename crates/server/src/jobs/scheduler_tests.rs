@@ -567,7 +567,7 @@ async fn the_message_shows_and_cpu_work_shares_two_threads() {
     );
     let mut saw_planning = false;
     while let Ok(event) = events.try_recv() {
-        if let crate::events::AppEvent::JobChanged { job } = event {
+        if let crate::events::AppEvent::JobChanged { job, .. } = event {
             saw_planning |= job.message.as_deref() == Some("Planning");
         }
     }
@@ -594,7 +594,7 @@ async fn a_prepared_job_runs_only_once_its_files_are_there() {
     let (_stop, _task) = start(&state);
 
     let woken = state.clone();
-    let job = super::create_prepared(&state, "fake", "slow input", &json!({}), move |dir| {
+    let job = super::create_prepared(&state, None, "fake", "slow input", &json!({}), move |dir| {
         // Wake the scheduler in the middle of a slow copy: it looks at the queue now, and must
         // not see the job before its file is there.
         woken.jobs.wake.notify_one();
@@ -615,7 +615,7 @@ async fn a_failed_preparation_leaves_no_job_and_no_directory() {
     state
         .jobs
         .register(Arc::new(FakeKind::new(1, 1, Duration::ZERO)));
-    let err = super::create_prepared(&state, "fake", "broken", &json!({}), |dir| {
+    let err = super::create_prepared(&state, None, "fake", "broken", &json!({}), |dir| {
         std::fs::write(dir.join("half.pdf"), b"%PDF").unwrap();
         Err(crate::error::ApiError::bad_request("not a PDF"))
     })
@@ -623,7 +623,7 @@ async fn a_failed_preparation_leaves_no_job_and_no_directory() {
     .unwrap_err();
     assert_eq!(status(err), axum::http::StatusCode::BAD_REQUEST);
     assert!(
-        store::list(&state.db, crate::db::now_ms())
+        store::list(&state.db, crate::db::now_ms(), None)
             .await
             .unwrap()
             .is_empty()

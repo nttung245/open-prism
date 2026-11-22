@@ -217,6 +217,7 @@ impl JobKind for PdfImport {
             let from = out.clone();
             let project = crate::projects::create_from_dir(
                 &job.state,
+                job.user_id.as_deref(),
                 &params.name,
                 "Imported from PDF",
                 move |dest| {
@@ -229,7 +230,11 @@ impl JobKind for PdfImport {
             )
             .await
             .map_err(|err| JobError::Fatal(format!("cannot create the project: {err}")))?;
-            if let Err(err) = job.state.compiler.start(&job.state, &project) {
+            if let Err(err) = job
+                .state
+                .compiler
+                .start(&job.state, &project, job.user_id.as_deref())
+            {
                 tracing::warn!(project = %project.id, %err, "cannot compile the imported project");
             }
             Ok(Some(project.id))

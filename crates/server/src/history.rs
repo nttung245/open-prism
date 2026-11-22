@@ -23,6 +23,7 @@ use crate::db::now_ms;
 use crate::error::ApiError;
 use crate::events::ProjectEvent;
 use crate::state::AppState;
+use crate::users;
 
 /// Longest label, in characters.
 pub const MAX_LABEL_CHARS: usize = 100;
@@ -32,6 +33,15 @@ const DEFAULT_PAGE: u32 = 50;
 const MAX_PAGE: u32 = 200;
 /// At most one `compiled` snapshot per project in this interval.
 pub const COMPILE_SNAPSHOT_INTERVAL_MS: i64 = 10 * 60 * 1000;
+
+/// Who led to a snapshot (server mode).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct SnapshotAuthor {
+    pub id: String,
+    pub display_name: String,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -48,6 +58,20 @@ pub struct Snapshot {
     pub added: u32,
     pub modified: u32,
     pub deleted: u32,
+    /// Whoever created, imported, edited with AI, compiled, saved or restored: `None` in
+    /// single-user mode, for the access token, and once the account is gone.
+    pub author: Option<SnapshotAuthor>,
+}
+
+/// Snapshots with the display name of their author: `SELECT … FROM snapshots` then `$rest`.
+macro_rules! select_snapshots {
+    ($rest:literal) => {
+        concat!(
+            "SELECT *, (SELECT display_name FROM users WHERE users.id = snapshots.author_id) AS author_name
+             FROM snapshots ",
+            $rest
+        )
+    };
 }
 
 /// One page of the timeline, newest first.
@@ -138,8 +162,9 @@ fn clean_summary(summary: &str) -> String {
     cut
 }
 
-/// Takes a snapshot of the project's files and records it. Returns `None` when nothing changed
-/// since the latest snapshot and `force` is not set.
+/// Takes a snapshot of the project's files and records it, with the account that led to it
+/// (`author`, server mode). Returns `None` when nothing changed since the latest snapshot and
+/// `force` is not set.
 pub async fn take(
     state: &AppState,
     project_id: &str,
@@ -147,15 +172,22 @@ pub async fn take(
     summary: &str,
     label: Option<String>,
     force: bool,
+    author: Option<&str>,
 ) -> Result<Option<Snapshot>, ApiError> {
     let _guard = state.lock_project(project_id).await;
-    take_locked(state, project_id, kind, summary, label, force).await
+    take_locked(state, project_id, kind, summary, label, force, author).await
 }
 
 /// Like [`take`] for automatic snapshots: failures are logged, never returned, so the action
 /// that triggered the snapshot is not affected.
-pub async fn take_quietly(state: &AppState, project_id: &str, kind: SnapshotKind, summary: &str) {
-    if let Err(err) = take(state, project_id, kind, summary, None, false).await {
+pub async fn take_quietly(
+    state: &AppState,
+    project_id: &str,
+    kind: SnapshotKind,
+    summary: &str,
+    author: Option<&str>,
+) {
+    if let Err(err) = take(state, project_id, kind, summary, None, false, author).await {
         tracing::warn!(project = %project_id, kind = kind.as_str(), ?err, "cannot take a snapshot");
     }
 }
@@ -168,11 +200,22 @@ async fn take_locked(
     summary: &str,
     label: Option<String>,
     force: bool,
+    author: Option<&str>,
 ) -> Result<Option<Snapshot>, ApiError> {
+    let author = match author {
+        Some(id) => users::get(&state.db, id)
+            .await?
+            .map(|record| SnapshotAuthor {
+                id: record.user.id,
+                display_name: record.user.display_name,
+            }),
+        None => None,
+    };
     let git_dir = state.paths.history_dir(project_id);
     let root = state.paths.project_dir(project_id);
     let summary = clean_summary(summary);
     let message = summary.clone();
+    let author_name = author.as_ref().map(|author| author.display_name.clone());
     let commit = tokio::task::spawn_blocking(move || {
         History::open_or_init(&git_dir)?.snapshot(
             &root,
@@ -181,6 +224,7 @@ async fn take_locked(
                 summary: &message,
                 force,
                 max_file_bytes: MAX_FILE_BYTES,
+                author: author_name.as_deref(),
             },
         )
     })
@@ -197,14 +241,16 @@ async fn take_locked(
         added: commit.counts.added,
         modified: commit.counts.modified,
         deleted: commit.counts.deleted,
+        author,
     };
     // An upsert: the timeline may have picked the commit up already (see `reconcile`).
     sqlx::query(
-        "INSERT INTO snapshots (project_id, rev, kind, label, summary, added, modified, deleted, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO snapshots
+             (project_id, rev, kind, label, summary, added, modified, deleted, created_at, author_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (project_id, rev) DO UPDATE SET
              kind = excluded.kind, label = excluded.label, summary = excluded.summary,
-             created_at = excluded.created_at",
+             created_at = excluded.created_at, author_id = excluded.author_id",
     )
     .bind(project_id)
     .bind(&snapshot.rev)
@@ -215,6 +261,7 @@ async fn take_locked(
     .bind(snapshot.modified)
     .bind(snapshot.deleted)
     .bind(snapshot.created_at)
+    .bind(snapshot.author.as_ref().map(|author| &author.id))
     .execute(&state.db)
     .await?;
     state
@@ -223,8 +270,11 @@ async fn take_locked(
     Ok(Some(snapshot))
 }
 
+/// A row of [`select_snapshots`].
 fn from_row(row: &SqliteRow) -> Result<Snapshot, sqlx::Error> {
     let kind: String = row.try_get("kind")?;
+    let author_id: Option<String> = row.try_get("author_id")?;
+    let author_name: Option<String> = row.try_get("author_name")?;
     Ok(Snapshot {
         rev: row.try_get("rev")?,
         kind: SnapshotKind::parse(&kind).unwrap_or(SnapshotKind::Manual),
@@ -234,12 +284,15 @@ fn from_row(row: &SqliteRow) -> Result<Snapshot, sqlx::Error> {
         added: row.try_get("added")?,
         modified: row.try_get("modified")?,
         deleted: row.try_get("deleted")?,
+        author: author_id
+            .zip(author_name)
+            .map(|(id, display_name)| SnapshotAuthor { id, display_name }),
     })
 }
 
 /// A snapshot of the project, or 404.
 pub async fn get(state: &AppState, project_id: &str, rev: &str) -> Result<Snapshot, ApiError> {
-    let row = sqlx::query("SELECT * FROM snapshots WHERE project_id = ? AND rev = ?")
+    let row = sqlx::query(select_snapshots!("WHERE project_id = ? AND rev = ?"))
         .bind(project_id)
         .bind(rev)
         .fetch_optional(&state.db)
@@ -269,7 +322,12 @@ pub async fn latest_of_kind(
 
 /// Takes a `compiled` snapshot after a successful compilation, at most once per
 /// [`COMPILE_SNAPSHOT_INTERVAL_MS`] (auto-compile runs after every save).
-pub async fn after_compile(state: &AppState, project_id: &str, result: &CompileResult) {
+pub async fn after_compile(
+    state: &AppState,
+    project_id: &str,
+    result: &CompileResult,
+    author: Option<&str>,
+) {
     if result.status != CompileStatus::Success {
         return;
     }
@@ -286,6 +344,7 @@ pub async fn after_compile(state: &AppState, project_id: &str, result: &CompileR
         project_id,
         SnapshotKind::Compiled,
         "Compiled successfully",
+        author,
     )
     .await;
 }
@@ -354,10 +413,9 @@ pub async fn list(
     let limit = limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
     let rows = match before {
         None => {
-            sqlx::query(
-                "SELECT * FROM snapshots WHERE project_id = ?
-                 ORDER BY created_at DESC, rowid DESC LIMIT ?",
-            )
+            sqlx::query(select_snapshots!(
+                "WHERE project_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?"
+            ))
             .bind(project_id)
             .bind(limit + 1)
             .fetch_all(&state.db)
@@ -374,11 +432,10 @@ pub async fn list(
             .ok_or_else(|| ApiError::not_found(format!("no snapshot {rev} in this project")))?;
             let created_at: i64 = cursor.try_get("created_at")?;
             let rowid: i64 = cursor.try_get("rowid")?;
-            sqlx::query(
-                "SELECT * FROM snapshots WHERE project_id = ?
-                     AND (created_at < ? OR (created_at = ? AND rowid < ?))
-                 ORDER BY created_at DESC, rowid DESC LIMIT ?",
-            )
+            sqlx::query(select_snapshots!(
+                "WHERE project_id = ? AND (created_at < ? OR (created_at = ? AND rowid < ?))
+                 ORDER BY created_at DESC, rowid DESC LIMIT ?"
+            ))
             .bind(project_id)
             .bind(created_at)
             .bind(created_at)
@@ -492,6 +549,7 @@ pub async fn restore(
     project_id: &str,
     rev: &str,
     paths: Option<Vec<String>>,
+    author: Option<&str>,
 ) -> Result<RestoreResult, ApiError> {
     let source = get(state, project_id, rev).await?;
     let paths = match paths {
@@ -525,6 +583,7 @@ pub async fn restore(
         &format!("Before restoring {what} from {from}"),
         None,
         false,
+        author,
     )
     .await?;
     let git_dir = state.paths.history_dir(project_id);
@@ -541,6 +600,7 @@ pub async fn restore(
         &format!("Restored {what} from {from}"),
         None,
         false,
+        author,
     )
     .await?;
     Ok(RestoreResult { changed, snapshot })

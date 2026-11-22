@@ -15,6 +15,7 @@ openprism-core = { path = "crates/core" }
 openprism-ai = { path = "crates/ai" }
 openprism-literature = { path = "crates/literature" }
 
+argon2 = "0.6"
 anyhow = "1"
 axum = { version = "0.8", features = ["multipart"] }
 axum-extra = { version = "0.12", features = ["cookie"] }
@@ -32,6 +33,7 @@ insta = { version = "1.49", features = ["yaml"] }
 mime_guess = "2"
 nix = { version = "0.32", features = ["signal", "process", "fs"] }
 notify = "8.2"
+url = "2.5.9"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

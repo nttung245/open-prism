@@ -176,16 +176,21 @@ fn summary(row: &sqlx::sqlite::SqliteRow, awaiting: bool) -> Result<ThreadSummar
     })
 }
 
+/// The conversations of a project: those `user_id` started, or all of them for `None` (single-user
+/// mode and the access token).
 pub async fn list_threads(
     state: &AppState,
     project_id: &str,
+    user_id: Option<&str>,
 ) -> Result<Vec<ThreadSummary>, ApiError> {
     projects::get(state, project_id).await?;
     let rows = sqlx::query(
         "SELECT t.*, EXISTS (SELECT 1 FROM ai_patches p WHERE p.thread_id = t.id AND p.status = 'pending') AS awaiting
-         FROM ai_threads t WHERE t.project_id = ? ORDER BY t.updated_at DESC",
+         FROM ai_threads t WHERE t.project_id = ?1 AND (?2 IS NULL OR t.user_id = ?2)
+         ORDER BY t.updated_at DESC",
     )
     .bind(project_id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await?;
     rows.iter()
@@ -193,15 +198,21 @@ pub async fn list_threads(
         .collect()
 }
 
-pub async fn create_thread(state: &AppState, project_id: &str) -> Result<ThreadSummary, ApiError> {
+/// A new conversation, belonging to `user_id` (`None` in single-user mode).
+pub async fn create_thread(
+    state: &AppState,
+    project_id: &str,
+    user_id: Option<&str>,
+) -> Result<ThreadSummary, ApiError> {
     projects::get(state, project_id).await?;
     let id = Uuid::now_v7().to_string();
     let now = now_ms();
     sqlx::query(
-        "INSERT INTO ai_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, 'New chat', ?, ?)",
+        "INSERT INTO ai_threads (id, project_id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, 'New chat', ?, ?)",
     )
     .bind(&id)
     .bind(project_id)
+    .bind(user_id)
     .bind(now)
     .bind(now)
     .execute(&state.db)
@@ -221,6 +232,26 @@ pub async fn thread(state: &AppState, id: &str) -> Result<ThreadSummary, ApiErro
     summary(&row, row.try_get::<bool, _>("awaiting").unwrap_or(false))
 }
 
+/// The project of a conversation and who started it (`None`: single-user mode or the access token).
+pub async fn thread_owner(
+    state: &AppState,
+    id: &str,
+) -> Result<(String, Option<String>), ApiError> {
+    sqlx::query_as("SELECT project_id, user_id FROM ai_threads WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such conversation"))
+}
+
+/// Who started a conversation, for the snapshots its edits make; only they can use it (D7).
+async fn thread_author(state: &AppState, id: &str) -> Option<String> {
+    thread_owner(state, id)
+        .await
+        .ok()
+        .and_then(|(_, user)| user)
+}
+
 pub async fn delete_thread(state: &AppState, id: &str) -> Result<(), ApiError> {
     let summary = thread(state, id).await?;
     sqlx::query("DELETE FROM ai_threads WHERE id = ?")
@@ -236,6 +267,20 @@ pub async fn delete_thread(state: &AppState, id: &str) -> Result<(), ApiError> {
         }
     }
     Ok(())
+}
+
+/// Deletes the conversations `user_id` started in a project (they left it, or were removed),
+/// and returns their ids: the caller removes their images once the transaction commits.
+pub async fn delete_user_threads(
+    conn: &mut sqlx::SqliteConnection,
+    project_id: &str,
+    user_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("DELETE FROM ai_threads WHERE project_id = ? AND user_id = ? RETURNING id")
+        .bind(project_id)
+        .bind(user_id)
+        .fetch_all(conn)
+        .await
 }
 
 async fn messages(state: &AppState, thread_id: &str) -> Result<Vec<StoredMessage>, ApiError> {
@@ -311,17 +356,25 @@ async fn append(state: &AppState, thread_id: &str, message: &Message) -> Result<
     Ok(())
 }
 
+/// The model of a turn: the one asked for, if `user_id` may use its provider, or their Agent.
 async fn resolve_model(
     state: &AppState,
+    user_id: Option<&str>,
     requested: Option<ModelRef>,
 ) -> Result<ModelRef, ApiError> {
     match requested {
-        Some(model) => Ok(model),
-        None => settings::roles(state).await?.agent.ok_or_else(|| {
-            ApiError::bad_request(
-                "no model is set up: add a provider and choose a model in Settings",
-            )
-        }),
+        Some(model) => {
+            settings::check_usable(state, user_id, &model).await?;
+            Ok(model)
+        }
+        None => settings::roles_for(state, user_id)
+            .await?
+            .agent
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "no model is set up: add a provider and choose a model in Settings",
+                )
+            }),
     }
 }
 
@@ -345,7 +398,9 @@ async fn prepare(
 ) -> Result<Prepared, ApiError> {
     let summary = thread(state, thread_id).await?;
     let project = projects::get(state, &summary.project_id).await?;
-    let model_ref = resolve_model(state, requested).await?;
+    // Only its creator reaches a conversation (D7): the turn runs with their models.
+    let (_, creator) = thread_owner(state, thread_id).await?;
+    let model_ref = resolve_model(state, creator.as_deref(), requested).await?;
     let config = settings::config(state, &model_ref.provider_id).await?;
     let model = Model::new(&config, &model_ref.model)
         .map_err(|err| ApiError::bad_request(err.to_string()))?;
@@ -513,7 +568,15 @@ async fn record_decisions(
     if !accepted.is_empty() {
         accepted.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.id.cmp(&b.id)));
         let summary = ai_edit_summary(&accepted);
-        history::take_quietly(state, &project_id, SnapshotKind::AiEdit, &summary).await;
+        let author = thread_author(state, thread_id).await;
+        history::take_quietly(
+            state,
+            &project_id,
+            SnapshotKind::AiEdit,
+            &summary,
+            author.as_deref(),
+        )
+        .await;
     }
     Ok(())
 }
@@ -744,7 +807,15 @@ async fn run_and_save(
     let status = result.status.unwrap_or(DoneStatus::Complete);
     if status == DoneStatus::AwaitingApproval && !result.patches.is_empty() {
         let summary = format!("Before AI edit of {}", files_of(&result.patches));
-        history::take_quietly(state, &project.id, SnapshotKind::BeforeAiEdit, &summary).await;
+        let author = thread_author(state, thread_id).await;
+        history::take_quietly(
+            state,
+            &project.id,
+            SnapshotKind::BeforeAiEdit,
+            &summary,
+            author.as_deref(),
+        )
+        .await;
     }
     let error = result.error.map(|err| (err.to_string(), err.retryable()));
     Ok((status, error))
@@ -827,8 +898,10 @@ pub struct InlineRequest {
 
 const MAX_INLINE_CHARS: usize = 20_000;
 
+/// A quick action on a selection, with the models of `user_id` (server mode).
 pub async fn inline(
     state: &AppState,
+    user_id: Option<&str>,
     request: InlineRequest,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
     projects::get(state, &request.project_id).await?;
@@ -841,9 +914,12 @@ pub async fn inline(
         ));
     }
     let model_ref = match request.model {
-        Some(model) => model,
+        Some(model) => {
+            settings::check_usable(state, user_id, &model).await?;
+            model
+        }
         None => {
-            let roles = settings::roles(state).await?;
+            let roles = settings::roles_for(state, user_id).await?;
             roles.fast.or(roles.agent).ok_or_else(|| {
                 ApiError::bad_request(
                     "no model is set up: add a provider and choose a model in Settings",

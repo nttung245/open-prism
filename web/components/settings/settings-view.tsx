@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import {
+  type ReactNode,
   type SubmitEvent,
   useCallback,
   useEffect,
@@ -30,26 +31,26 @@ import type { ProviderKindInfo } from "@/lib/api/types/ProviderKindInfo";
 import type { ProviderTestResult } from "@/lib/api/types/ProviderTestResult";
 import type { ProviderView } from "@/lib/api/types/ProviderView";
 import type { Roles } from "@/lib/api/types/Roles";
+import { fetchSession, SESSION_KEY } from "@/lib/auth";
 
 const PROVIDERS = ["providers"] as const;
 const ROLES = ["roles"] as const;
+const DEFAULT_ROLES = ["roles", "defaults"] as const;
+
+/**
+ * Whose AI settings a page shows:
+ * - `single`: single-user mode, everything as one person;
+ * - `mine`: server mode, Settings: shared and personal providers, the person's own models;
+ * - `shared`: server mode, the admin page: shared providers and the default models.
+ */
+export type AiScope = "single" | "mine" | "shared";
 
 const input =
   "w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm outline-none focus:border-accent";
 
 export function SettingsView() {
-  const kinds = useQuery({
-    queryKey: ["provider-kinds"],
-    queryFn: () => apiJson<ProviderKindInfo[]>("/api/settings/provider-kinds"),
-    staleTime: Number.POSITIVE_INFINITY,
-  });
-  const providers = useQuery({
-    queryKey: PROVIDERS,
-    queryFn: () => apiJson<ProviderView[]>("/api/settings/providers"),
-  });
-  // Models found by "Test connection", per provider.
-  const [models, setModels] = useState<Record<string, string[]>>({});
-
+  const session = useQuery({ queryKey: SESSION_KEY, queryFn: fetchSession });
+  const server = session.data?.mode === "server";
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-col gap-10 px-6 py-10">
       <header className="flex items-center gap-3">
@@ -62,11 +63,56 @@ export function SettingsView() {
         </Link>
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
       </header>
+      {session.error && (
+        <p className="text-sm text-danger">{errorMessage(session.error)}</p>
+      )}
+      {session.data && (
+        <AiSettings
+          scope={server ? "mine" : "single"}
+          isAdmin={session.data.user?.role === "admin"}
+        />
+      )}
+    </main>
+  );
+}
 
+/** Providers, then the models of each role, for `scope`. */
+export function AiSettings({
+  scope,
+  isAdmin,
+}: {
+  scope: AiScope;
+  isAdmin: boolean;
+}) {
+  const kinds = useQuery({
+    queryKey: ["provider-kinds"],
+    queryFn: () => apiJson<ProviderKindInfo[]>("/api/settings/provider-kinds"),
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+  const providers = useQuery({
+    queryKey: PROVIDERS,
+    queryFn: () => apiJson<ProviderView[]>("/api/settings/providers"),
+  });
+  // Models found by "Test connection", per provider.
+  const [models, setModels] = useState<Record<string, string[]>>({});
+  const shown =
+    scope === "shared"
+      ? providers.data?.filter((provider) => provider.shared)
+      : providers.data;
+
+  return (
+    <>
       <section className="flex flex-col gap-4">
         <div>
-          <h2 className="text-lg font-semibold">AI providers</h2>
+          <h2 className="text-lg font-semibold">
+            {scope === "shared" ? "Shared AI providers" : "AI providers"}
+          </h2>
           <p className="text-sm text-muted">
+            {scope === "shared"
+              ? "Everyone on this server can use these. "
+              : scope === "mine"
+                ? "Shared providers are set up by an admin; add your own key as a personal provider, which only you see and use. "
+                : ""}
             Keys are stored on this server and never sent back to the browser.
           </p>
         </div>
@@ -74,38 +120,51 @@ export function SettingsView() {
           <p className="text-sm text-danger">{errorMessage(providers.error)}</p>
         )}
         <ul className="flex flex-col gap-3">
-          {providers.data?.map((provider) => (
+          {shown?.map((provider) => (
             <ProviderCard
               key={provider.id}
               provider={provider}
               kind={kinds.data?.find((k) => k.kind === provider.kind)}
+              badge={
+                scope === "mine"
+                  ? provider.shared
+                    ? "Shared"
+                    : "Personal"
+                  : undefined
+              }
+              canManage={scope !== "mine" || !provider.shared || isAdmin}
               onModels={(list) =>
                 setModels((current) => ({ ...current, [provider.id]: list }))
               }
             />
           ))}
         </ul>
-        {kinds.data && <AddProvider kinds={kinds.data} />}
+        {kinds.data && <AddProvider kinds={kinds.data} scope={scope} />}
       </section>
 
-      {providers.data && (
+      {shown && (
         <RolesForm
-          providers={providers.data}
+          scope={scope}
+          providers={shown}
           models={models}
           onModels={setModels}
         />
       )}
-    </main>
+    </>
   );
 }
 
 function ProviderCard({
   provider,
   kind,
+  badge,
+  canManage,
   onModels,
 }: {
   provider: ProviderView;
   kind: ProviderKindInfo | undefined;
+  badge?: "Shared" | "Personal";
+  canManage: boolean;
   onModels: (models: string[]) => void;
 }) {
   const queryClient = useQueryClient();
@@ -137,7 +196,16 @@ function ProviderCard({
     <li className="rounded-lg border border-border p-4">
       <div className="flex flex-wrap items-center gap-2">
         <div className="min-w-0 flex-1">
-          <p className="font-medium">{provider.name}</p>
+          <p className="font-medium">
+            {provider.name}
+            {badge && (
+              <span
+                className={`ml-2 rounded px-1.5 py-0.5 align-middle text-xs font-normal ${badge === "Shared" ? "bg-panel text-muted" : "bg-accent/15 text-accent"}`}
+              >
+                {badge}
+              </span>
+            )}
+          </p>
           <p className="truncate text-xs text-muted">
             {kind?.label ?? provider.kind}
             {(provider.baseUrl ?? kind?.defaultBaseUrl) &&
@@ -154,19 +222,23 @@ function ProviderCard({
           )}
           Test connection
         </Button>
-        <IconButton label="Edit" onClick={() => setEditing((v) => !v)}>
-          <Pencil className="size-4" />
-        </IconButton>
-        <IconButton
-          label="Delete"
-          className="hover:text-danger"
-          onClick={() => {
-            if (window.confirm(`Delete the provider "${provider.name}"?`))
-              remove.mutate();
-          }}
-        >
-          <Trash2 className="size-4" />
-        </IconButton>
+        {canManage && (
+          <>
+            <IconButton label="Edit" onClick={() => setEditing((v) => !v)}>
+              <Pencil className="size-4" />
+            </IconButton>
+            <IconButton
+              label="Delete"
+              className="hover:text-danger"
+              onClick={() => {
+                if (window.confirm(`Delete the provider "${provider.name}"?`))
+                  remove.mutate();
+              }}
+            >
+              <Trash2 className="size-4" />
+            </IconButton>
+          </>
+        )}
       </div>
       {result && (
         <p
@@ -184,6 +256,9 @@ function ProviderCard({
       )}
       {test.error && (
         <p className="mt-2 text-xs text-danger">{errorMessage(test.error)}</p>
+      )}
+      {remove.error && (
+        <p className="mt-2 text-xs text-danger">{errorMessage(remove.error)}</p>
       )}
       {editing && (
         <EditProvider
@@ -284,7 +359,13 @@ function EditProvider({
   );
 }
 
-function AddProvider({ kinds }: { kinds: ProviderKindInfo[] }) {
+function AddProvider({
+  kinds,
+  scope,
+}: {
+  kinds: ProviderKindInfo[];
+  scope: AiScope;
+}) {
   const queryClient = useQueryClient();
   const [kind, setKind] = useState<ProviderKind>("openai");
   const [name, setName] = useState("");
@@ -300,6 +381,7 @@ function AddProvider({ kinds }: { kinds: ProviderKindInfo[] }) {
           name: name.trim() || info?.label || kind,
           baseUrl: baseUrl.trim() || undefined,
           apiKey: apiKey.trim() || undefined,
+          shared: scope === "shared" ? true : undefined,
         },
       }),
     onSuccess: () => {
@@ -317,7 +399,13 @@ function AddProvider({ kinds }: { kinds: ProviderKindInfo[] }) {
       }}
       className="grid gap-2 rounded-lg border border-dashed border-border p-4 sm:grid-cols-2"
     >
-      <p className="text-sm font-medium sm:col-span-2">Add a provider</p>
+      <p className="text-sm font-medium sm:col-span-2">
+        {scope === "shared"
+          ? "Add a shared provider"
+          : scope === "mine"
+            ? "Add a personal provider"
+            : "Add a provider"}
+      </p>
       <label className="text-xs text-muted">
         Type
         <select
@@ -375,10 +463,12 @@ function AddProvider({ kinds }: { kinds: ProviderKindInfo[] }) {
 }
 
 function RolesForm({
+  scope,
   providers,
   models,
   onModels,
 }: {
+  scope: AiScope;
   providers: ProviderView[];
   models: Record<string, string[]>;
   onModels: (
@@ -386,9 +476,18 @@ function RolesForm({
   ) => void;
 }) {
   const queryClient = useQueryClient();
+  // The person's own choices, or (admin page) the defaults everyone else falls back to.
+  const path =
+    scope === "shared" ? "/api/settings/default-roles" : "/api/settings/roles";
+  const key = scope === "shared" ? DEFAULT_ROLES : ROLES;
   const roles = useQuery({
-    queryKey: ROLES,
-    queryFn: () => apiJson<Roles>("/api/settings/roles"),
+    queryKey: key,
+    queryFn: () => apiJson<Roles>(path),
+  });
+  const defaults = useQuery({
+    queryKey: DEFAULT_ROLES,
+    queryFn: () => apiJson<Roles>("/api/settings/default-roles"),
+    enabled: scope === "mine",
   });
   const [agent, setAgent] = useState<ModelRef | null>(null);
   const [fast, setFast] = useState<ModelRef | null>(null);
@@ -400,12 +499,21 @@ function RolesForm({
   }, [roles.data]);
   const save = useMutation({
     mutationFn: () =>
-      apiJson<Roles>("/api/settings/roles", {
+      apiJson<Roles>(path, {
         method: "PUT",
         json: { agent, fast },
       }),
-    onSuccess: (saved) => queryClient.setQueryData(ROLES, saved),
+    onSuccess: (saved) => {
+      queryClient.setQueryData(key, saved);
+      // The defaults also show on the Settings page.
+      if (scope === "shared")
+        void queryClient.invalidateQueries({ queryKey: ROLES });
+    },
   });
+  const describe = (model: ModelRef | null | undefined, none: string) =>
+    model
+      ? `${providers.find((p) => p.id === model.providerId)?.name ?? "a provider"} · ${model.model}`
+      : none;
   const requested = useRef(new Set<string>());
   const load = useCallback(
     async (providerId: string) => {
@@ -429,14 +537,28 @@ function RolesForm({
   return (
     <section className="flex flex-col gap-4">
       <div>
-        <h2 className="text-lg font-semibold">Models</h2>
+        <h2 className="text-lg font-semibold">
+          {scope === "shared"
+            ? "Default models"
+            : scope === "mine"
+              ? "Your models"
+              : "Models"}
+        </h2>
         <p className="text-sm text-muted">
           The agent model answers the chat and proposes edits; it should support
           tool calling. The fast model runs quick actions on a selection.
+          {scope === "shared" &&
+            " Everyone who has not chosen their own models uses these."}
+          {scope === "mine" &&
+            " Leave a role empty to use the default an admin chose."}
         </p>
       </div>
       {providers.length === 0 ? (
-        <p className="text-sm text-muted">Add a provider first.</p>
+        <p className="text-sm text-muted">
+          {scope === "shared"
+            ? "Add a shared provider first."
+            : "Add a provider first."}
+        </p>
       ) : (
         <>
           <RolePicker
@@ -446,6 +568,12 @@ function RolesForm({
             models={models}
             onLoad={load}
             onChange={setAgent}
+            emptyLabel={scope === "mine" ? "Use the default" : undefined}
+            hint={
+              scope === "mine"
+                ? `Default: ${describe(defaults.data?.agent, "none yet; ask an admin, or choose one")}`
+                : undefined
+            }
           />
           <RolePicker
             label="Fast"
@@ -455,6 +583,12 @@ function RolesForm({
             onLoad={load}
             onChange={setFast}
             optional
+            emptyLabel={scope === "mine" ? "Use the default" : undefined}
+            hint={
+              scope === "mine"
+                ? `Default: ${describe(defaults.data?.fast, "same as Agent")}`
+                : undefined
+            }
           />
           {save.error && (
             <p className="text-xs text-danger">{errorMessage(save.error)}</p>
@@ -483,10 +617,14 @@ function RolePicker({
   providers,
   models,
   optional = false,
+  emptyLabel,
+  hint,
   onLoad,
   onChange,
 }: {
   label: string;
+  emptyLabel?: string;
+  hint?: ReactNode;
   value: ModelRef | null;
   providers: ProviderView[];
   models: Record<string, string[]>;
@@ -501,73 +639,80 @@ function RolePicker({
     if (providerId) onLoad(providerId);
   }, [providerId, onLoad]);
   return (
-    <div className="grid items-end gap-2 sm:grid-cols-[6rem_1fr_1fr_7rem]">
-      <span className="text-sm font-medium">{label}</span>
-      <label className="text-xs text-muted">
-        Provider
-        <select
-          className={input}
-          value={providerId}
-          onChange={(e) =>
-            onChange(
-              e.target.value ? { providerId: e.target.value, model: "" } : null,
-            )
-          }
-        >
-          <option value="">{optional ? "Same as agent" : "Choose…"}</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
+    <div className="flex flex-col gap-1">
+      <div className="grid items-end gap-2 sm:grid-cols-[6rem_1fr_1fr_7rem]">
+        <span className="text-sm font-medium">{label}</span>
+        <label className="text-xs text-muted">
+          Provider
+          <select
+            className={input}
+            value={providerId}
+            onChange={(e) =>
+              onChange(
+                e.target.value
+                  ? { providerId: e.target.value, model: "" }
+                  : null,
+              )
+            }
+          >
+            <option value="">
+              {emptyLabel ?? (optional ? "Same as agent" : "Choose…")}
             </option>
-          ))}
-        </select>
-      </label>
-      <label className="text-xs text-muted">
-        Model
-        <input
-          className={input}
-          list={listId}
-          value={value?.model ?? ""}
-          disabled={!providerId}
-          placeholder={
-            options.length > 0 ? "Pick or type a model" : "Type a model name"
-          }
-          onChange={(e) =>
-            providerId &&
-            onChange({
-              providerId,
-              model: e.target.value,
-              reasoning: value?.reasoning,
-            })
-          }
-        />
-        <datalist id={listId}>
-          {options.map((model) => (
-            <option key={model} value={model} />
-          ))}
-        </datalist>
-      </label>
-      <label
-        className="text-xs text-muted"
-        title="How much the model thinks before answering, for models that support it"
-      >
-        Reasoning
-        <select
-          className={input}
-          value={value?.reasoning ?? ""}
-          disabled={!providerId}
-          onChange={(e) =>
-            value &&
-            onChange({ ...value, reasoning: parseReasoning(e.target.value) })
-          }
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="text-xs text-muted">
+          Model
+          <input
+            className={input}
+            list={listId}
+            value={value?.model ?? ""}
+            disabled={!providerId}
+            placeholder={
+              options.length > 0 ? "Pick or type a model" : "Type a model name"
+            }
+            onChange={(e) =>
+              providerId &&
+              onChange({
+                providerId,
+                model: e.target.value,
+                reasoning: value?.reasoning,
+              })
+            }
+          />
+          <datalist id={listId}>
+            {options.map((model) => (
+              <option key={model} value={model} />
+            ))}
+          </datalist>
+        </label>
+        <label
+          className="text-xs text-muted"
+          title="How much the model thinks before answering, for models that support it"
         >
-          {REASONING_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+          Reasoning
+          <select
+            className={input}
+            value={value?.reasoning ?? ""}
+            disabled={!providerId}
+            onChange={(e) =>
+              value &&
+              onChange({ ...value, reasoning: parseReasoning(e.target.value) })
+            }
+          >
+            {REASONING_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {hint && <p className="text-xs text-muted sm:pl-[6.5rem]">{hint}</p>}
     </div>
   );
 }

@@ -4,4 +4,4 @@ import type { JobView } from "./JobView";
 /**
  * Something every open page may react to, whatever project it shows.
  */
-export type AppEvent = { "type": "jobChanged", job: JobView, } | { "type": "jobRemoved", id: string, } | { "type": "resync" };
+export type AppEvent = { "type": "jobChanged", job: JobView, } | { "type": "jobRemoved", id: string, } | { "type": "projectsChanged", } | { "type": "resync" };

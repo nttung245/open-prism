@@ -102,6 +102,7 @@ Transcribe exactly what the image shows: do not add, complete or correct its con
 /// while it writes is an `error` event.
 pub async fn image_to_latex(
     state: &AppState,
+    user_id: Option<&str>,
     request: ImageLatexRequest,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
     let project = projects::get(state, &request.project_id).await?;
@@ -120,7 +121,7 @@ pub async fn image_to_latex(
         .pop()
         .map(images::unstored)
         .ok_or_else(|| ApiError::bad_request("there is no image"))?;
-    let roles = settings::roles(state).await?;
+    let roles = settings::roles_for(state, user_id).await?;
     let model_ref = roles.fast.or(roles.agent).ok_or_else(|| {
         ApiError::bad_request("no model is set up: add a provider and choose a model in Settings")
     })?;

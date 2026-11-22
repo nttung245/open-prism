@@ -59,11 +59,13 @@ async fn script(server: &MockServer, responses: Vec<ResponseTemplate>, rest: Res
 async fn provider(state: &AppState, server: &MockServer) -> ModelRef {
     let view = settings::create(
         state,
+        &crate::auth::Principal::Local,
         CreateProviderRequest {
             name: "Fake".into(),
             kind: ProviderKind::OpenaiCompatible,
             base_url: Some(format!("{}/v1", server.uri())),
             api_key: Some("sk-test".into()),
+            shared: None,
         },
     )
     .await
@@ -182,6 +184,7 @@ async fn three_background_requests_per_provider_and_other_providers_go_on() {
         dir: dir.path().to_path_buf(),
         state: state.clone(),
         cancel: CancellationToken::new(),
+        user_id: None,
     };
     let asked = Instant::now();
     let reply = ctx.ai_request(&other_model, request("hi")).await.unwrap();

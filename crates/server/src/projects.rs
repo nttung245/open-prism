@@ -97,10 +97,24 @@ fn from_row(row: &SqliteRow) -> Result<Project, sqlx::Error> {
     })
 }
 
-pub async fn list(state: &AppState) -> Result<Vec<Project>, ApiError> {
-    let rows = sqlx::query("SELECT * FROM projects ORDER BY updated_at DESC")
-        .fetch_all(&state.db)
-        .await?;
+/// Every project, or with `user_id` (server mode) only those the user is a member of.
+pub async fn list(state: &AppState, user_id: Option<&str>) -> Result<Vec<Project>, ApiError> {
+    let rows = match user_id {
+        None => {
+            sqlx::query("SELECT * FROM projects ORDER BY updated_at DESC")
+                .fetch_all(&state.db)
+                .await?
+        }
+        Some(user_id) => {
+            sqlx::query(
+                "SELECT p.* FROM projects p JOIN project_members m ON m.project_id = p.id
+                 WHERE m.user_id = ? ORDER BY p.updated_at DESC",
+            )
+            .bind(user_id)
+            .fetch_all(&state.db)
+            .await?
+        }
+    };
     Ok(rows.iter().map(from_row).collect::<Result<_, _>>()?)
 }
 
@@ -114,14 +128,17 @@ pub async fn get(state: &AppState, id: &str) -> Result<Project, ApiError> {
     Ok(from_row(&row)?)
 }
 
-/// Inserts the metadata of a project whose directory is already populated.
+/// Inserts the metadata of a project whose directory is already populated; `owner` (server
+/// mode) becomes its owner in the same transaction.
 async fn insert(
     state: &AppState,
     id: &str,
     name: &str,
     main_file: &str,
+    owner: Option<&str>,
 ) -> Result<Project, ApiError> {
     let now = now_ms();
+    let mut tx = state.db.begin().await?;
     sqlx::query(
         "INSERT INTO projects (id, name, main_file, engine, created_at, updated_at)
          VALUES (?, ?, ?, 'auto', ?, ?)",
@@ -131,12 +148,20 @@ async fn insert(
     .bind(main_file)
     .bind(now)
     .bind(now)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+    if let Some(owner) = owner {
+        crate::members::add(&mut *tx, id, owner, crate::members::ProjectRole::Owner, now).await?;
+    }
+    tx.commit().await?;
     get(state, id).await
 }
 
-pub async fn create(state: &AppState, request: CreateProjectRequest) -> Result<Project, ApiError> {
+pub async fn create(
+    state: &AppState,
+    owner: Option<&str>,
+    request: CreateProjectRequest,
+) -> Result<Project, ApiError> {
     let name = validate_name(&request.name)?;
     let id = Uuid::now_v7().to_string();
     let dir = state.paths.project_dir(&id);
@@ -151,8 +176,8 @@ pub async fn create(state: &AppState, request: CreateProjectRequest) -> Result<P
         let _ = tokio::fs::remove_dir_all(&dir).await;
         return Err(ApiError::internal(err));
     }
-    let project = insert(state, &id, &name, DEFAULT_MAIN_FILE).await?;
-    history::take_quietly(state, &id, SnapshotKind::Created, "Project created").await;
+    let project = insert(state, &id, &name, DEFAULT_MAIN_FILE, owner).await?;
+    history::take_quietly(state, &id, SnapshotKind::Created, "Project created", owner).await;
     Ok(project)
 }
 
@@ -161,6 +186,7 @@ pub async fn create(state: &AppState, request: CreateProjectRequest) -> Result<P
 /// version in the history.
 pub async fn create_from_dir<F>(
     state: &AppState,
+    owner: Option<&str>,
     name: &str,
     summary: &str,
     extract: F,
@@ -182,8 +208,8 @@ where
     match extracted {
         Ok(main_file) => {
             let main_file = main_file.unwrap_or_else(|| DEFAULT_MAIN_FILE.to_owned());
-            let project = insert(state, &id, &name, &main_file).await?;
-            history::take_quietly(state, &id, SnapshotKind::Created, summary).await;
+            let project = insert(state, &id, &name, &main_file, owner).await?;
+            history::take_quietly(state, &id, SnapshotKind::Created, summary, owner).await;
             Ok(project)
         }
         Err(err) => {

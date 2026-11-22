@@ -86,11 +86,13 @@ async fn model(server: &MockServer, page_bodies: &[&str]) {
 async fn provider(app: &TestApp, server: &MockServer) -> ModelRef {
     let view = settings::create(
         &app.state,
+        &crate::auth::Principal::Local,
         CreateProviderRequest {
             name: "Fake".into(),
             kind: ProviderKind::OpenaiCompatible,
             base_url: Some(format!("{}/v1", server.uri())),
             api_key: Some("sk-test".into()),
+            shared: None,
         },
     )
     .await
@@ -135,15 +137,27 @@ async fn setup(page_bodies: &[&str]) -> Import {
 
 impl Import {
     async fn start(&self, pages: Vec<u32>, pdf_pages: u32) -> String {
+        self.start_as(None, &self.model, pages, pdf_pages).await
+    }
+
+    /// Starts an import as `user_id` (server mode), with `model`.
+    async fn start_as(
+        &self,
+        user_id: Option<&str>,
+        model: &ModelRef,
+        pages: Vec<u32>,
+        pdf_pages: u32,
+    ) -> String {
         let params = PdfImportParams {
             name: "Imported".into(),
             file_name: "paper.pdf".into(),
             pages,
-            model: self.model.clone(),
+            model: model.clone(),
         };
         let bytes = pdf(pdf_pages);
         crate::jobs::create_prepared(
             &self.app.state,
+            user_id,
             KIND,
             "Import paper.pdf",
             &serde_json::to_value(params).unwrap(),
@@ -242,6 +256,131 @@ async fn a_pdf_becomes_a_project() {
     .await;
     assert_eq!(compiled.state, JobState::Succeeded);
     assert_eq!(import.requests_with("first page of a PDF").await, 1);
+}
+
+#[tokio::test]
+async fn the_project_of_an_import_belongs_to_whoever_started_it() {
+    let import = setup(&["Some text.\n"]).await;
+    let minh = crate::users::create(
+        &import.app.state.db,
+        "minh",
+        "Minh",
+        crate::users::UserRole::User,
+        0,
+    )
+    .await
+    .unwrap();
+    let job = import
+        .start_as(Some(&minh.id), &import.model, vec![1], 1)
+        .await;
+    let done = finished(&import.app.state, &job).await;
+    assert_eq!(done.state, JobState::Succeeded, "{done:?}");
+    let project = done.project_id.unwrap();
+    assert_eq!(
+        crate::members::role_of(&import.app.state.db, &project, &minh.id)
+            .await
+            .unwrap(),
+        Some(crate::members::ProjectRole::Owner)
+    );
+}
+
+/// The keys of the requests `server` received.
+async fn keys(server: &MockServer) -> Vec<String> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| {
+            request.headers["authorization"]
+                .to_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_job_uses_the_key_of_whoever_started_it() {
+    let import = setup(&["Some text.\n"]).await;
+    let state = &import.app.state;
+    let account = |name: &'static str| async move {
+        crate::users::create(&state.db, name, name, crate::users::UserRole::User, 0)
+            .await
+            .unwrap()
+    };
+    let lan = account("lan").await;
+    let minh = account("minh").await;
+    // Lan's own provider, on its own fake server.
+    let lan_server = MockServer::start().await;
+    model(&lan_server, &["Some text.\n"]).await;
+    let view = settings::create(
+        state,
+        &crate::auth::Principal::User(lan.clone()),
+        CreateProviderRequest {
+            name: "Lan's".into(),
+            kind: ProviderKind::OpenaiCompatible,
+            base_url: Some(format!("{}/v1", lan_server.uri())),
+            api_key: Some("sk-lan".into()),
+            shared: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!view.shared);
+    let lans_model = ModelRef {
+        provider_id: view.id,
+        model: "fake-vision".into(),
+        reasoning: None,
+    };
+
+    // Lan's import asks with Lan's key, and only hers.
+    let job = import
+        .start_as(Some(&lan.id), &lans_model, vec![1], 1)
+        .await;
+    let done = finished(state, &job).await;
+    assert_eq!(done.state, JobState::Succeeded, "{done:?}");
+    let sent = keys(&lan_server).await;
+    assert!(!sent.is_empty());
+    assert!(sent.iter().all(|key| key == "Bearer sk-lan"), "{sent:?}");
+    assert!(keys(&import.server).await.is_empty());
+
+    // A job of Minh's naming Lan's provider never reaches it: with no model of his own, it fails
+    // and says what to do.
+    let job = import
+        .start_as(Some(&minh.id), &lans_model, vec![1], 1)
+        .await;
+    let failed = finished(state, &job).await;
+    assert_eq!(failed.state, JobState::Failed, "{failed:?}");
+    assert!(
+        failed
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("choose a model for Agent"),
+        "{failed:?}"
+    );
+    assert_eq!(keys(&lan_server).await.len(), sent.len());
+
+    // Once Minh has a model (here the shared default), running the job again works.
+    settings::set_default_roles(
+        state,
+        settings::Roles {
+            agent: Some(import.model.clone()),
+            fast: None,
+        },
+    )
+    .await
+    .unwrap();
+    crate::jobs::retry(state, &job).await.unwrap();
+    let retried = finished(state, &job).await;
+    assert_eq!(retried.state, JobState::Succeeded, "{retried:?}");
+    let shared = keys(&import.server).await;
+    assert!(
+        !shared.is_empty() && shared.iter().all(|key| key == "Bearer sk-test"),
+        "{shared:?}"
+    );
+    assert_eq!(keys(&lan_server).await.len(), sent.len());
 }
 
 #[tokio::test]
@@ -426,7 +565,7 @@ mod route {
         let app = TestApp::new(Vec::new()).await;
         let server = MockServer::start().await;
         let model = provider(&app, &server).await;
-        settings::set_roles(
+        settings::set_default_roles(
             &app.state,
             Roles {
                 agent: Some(model),
@@ -453,7 +592,7 @@ mod route {
     }
 
     async fn no_jobs(app: &TestApp) -> bool {
-        crate::jobs::store::list(&app.state.db, crate::db::now_ms())
+        crate::jobs::store::list(&app.state.db, crate::db::now_ms(), None)
             .await
             .unwrap()
             .is_empty()

@@ -131,6 +131,9 @@ pub struct SnapshotRequest<'a> {
     pub force: bool,
     /// Files bigger than this are skipped ([`MAX_FILE_BYTES`] outside tests).
     pub max_file_bytes: u64,
+    /// The git author: the display name of whoever led to the snapshot (server mode). The
+    /// committer is always Open Prism; `None` makes Open Prism the author too.
+    pub author: Option<&'a str>,
 }
 
 /// A commit made by [`History::snapshot`].
@@ -305,17 +308,13 @@ impl History {
         };
         let counts = count_changes(&before, &entries);
         let tree = self.repo.find_tree(tree_id)?;
-        let signature = Signature::now(AUTHOR_NAME, AUTHOR_EMAIL)?;
+        let committer = Signature::now(AUTHOR_NAME, AUTHOR_EMAIL)?;
+        let author = Signature::now(request.author.unwrap_or(AUTHOR_NAME), AUTHOR_EMAIL)?;
         let message = commit_message(request.kind, request.summary);
         let parents: Vec<&git2::Commit<'_>> = parent.iter().collect();
-        let id = self.repo.commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            &message,
-            &tree,
-            &parents,
-        )?;
+        let id = self
+            .repo
+            .commit(Some("HEAD"), &author, &committer, &message, &tree, &parents)?;
         Ok(Some(SnapshotCommit {
             rev: id.to_string(),
             counts,
@@ -824,6 +823,7 @@ mod tests {
             summary: "test",
             force: false,
             max_file_bytes: LIMIT,
+            author: None,
         }
     }
 
@@ -956,6 +956,31 @@ mod tests {
         let tree = tree_entries(&f.history.commit(&commit.rev).unwrap().tree().unwrap()).unwrap();
         let paths: Vec<&str> = tree.keys().map(String::as_str).collect();
         assert_eq!(paths, ["main.tex"]);
+    }
+
+    #[test]
+    fn the_author_is_whoever_led_to_the_snapshot() {
+        let f = fixture();
+        put(&f.root, "main.tex", b"x");
+        let by_minh = f
+            .history
+            .snapshot(
+                &f.root,
+                SnapshotRequest {
+                    author: Some("Minh Tran"),
+                    ..request(SnapshotKind::Manual)
+                },
+            )
+            .unwrap()
+            .unwrap();
+        let commit = f.history.commit(&by_minh.rev).unwrap();
+        assert_eq!(commit.author().name().ok(), Some("Minh Tran"));
+        assert_eq!(commit.committer().name().ok(), Some(AUTHOR_NAME));
+
+        put(&f.root, "main.tex", b"y");
+        let unsigned = snap(&f, SnapshotKind::Compiled).unwrap();
+        let commit = f.history.commit(&unsigned.rev).unwrap();
+        assert_eq!(commit.author().name().ok(), Some(AUTHOR_NAME));
     }
 
     #[test]

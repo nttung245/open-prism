@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::ApiError;
+use crate::members::ProjectAccess;
 use crate::projects;
 use crate::state::AppState;
 
@@ -85,7 +86,7 @@ pub fn routes() -> Router<AppState> {
 
 async fn tree(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
 ) -> Result<Json<TreeResponse>, ApiError> {
     projects::get(&state, &id).await?;
     let root = state.paths.project_dir(&id);
@@ -95,6 +96,7 @@ async fn tree(
 
 async fn read(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, path)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
     projects::get(&state, &id).await?;
@@ -167,6 +169,7 @@ fn precondition(headers: &HeaderMap) -> Result<Precondition, ApiError> {
 
 async fn write(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, path)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -205,7 +208,7 @@ async fn write(
 
 async fn operation(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
     Json(operation): Json<FileOperation>,
 ) -> Result<StatusCode, ApiError> {
     projects::get(&state, &id).await?;
@@ -231,7 +234,7 @@ async fn operation(
 /// `multipart/form-data` with one or more `file` fields; existing files are replaced.
 async fn upload(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
     Query(query): Query<UploadQuery>,
     mut multipart: Multipart,
 ) -> Result<Json<UploadResponse>, ApiError> {

@@ -10,6 +10,7 @@ use crate::history::{
     self, AgainstParam, CreateSnapshotRequest, HistoryPage, RestoreRequest, RestoreResult,
     Snapshot, UpdateSnapshotRequest,
 };
+use crate::members::ProjectAccess;
 use crate::projects;
 use crate::state::AppState;
 use openprism_core::history::SnapshotKind;
@@ -38,7 +39,7 @@ pub fn routes() -> Router<AppState> {
 
 async fn list(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
     Query(query): Query<ListQuery>,
 ) -> Result<Json<HistoryPage>, ApiError> {
     projects::get(&state, &id).await?;
@@ -50,7 +51,7 @@ async fn list(
 /// Saves a version with a label, even if nothing changed since the latest snapshot.
 async fn create(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, principal, .. }: ProjectAccess,
     Json(request): Json<CreateSnapshotRequest>,
 ) -> Result<(StatusCode, Json<Snapshot>), ApiError> {
     projects::get(&state, &id).await?;
@@ -63,6 +64,7 @@ async fn create(
         summary,
         Some(label),
         true,
+        principal.user_id(),
     )
     .await?
     .ok_or_else(|| ApiError::internal("a forced snapshot was skipped"))?;
@@ -71,6 +73,7 @@ async fn create(
 
 async fn update(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, rev)): Path<(String, String)>,
     Json(request): Json<UpdateSnapshotRequest>,
 ) -> Result<Json<Snapshot>, ApiError> {
@@ -82,6 +85,7 @@ async fn update(
 
 async fn diff(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, rev)): Path<(String, String)>,
     Query(query): Query<DiffQuery>,
 ) -> Result<Response, ApiError> {
@@ -97,12 +101,13 @@ async fn diff(
 
 async fn restore(
     State(state): State<AppState>,
+    access: ProjectAccess,
     Path((id, rev)): Path<(String, String)>,
     request: Option<Json<RestoreRequest>>,
 ) -> Result<Json<RestoreResult>, ApiError> {
     projects::get(&state, &id).await?;
     let request = request.map(|Json(request)| request).unwrap_or_default();
     Ok(Json(
-        history::restore(&state, &id, &rev, request.paths).await?,
+        history::restore(&state, &id, &rev, request.paths, access.principal.user_id()).await?,
     ))
 }

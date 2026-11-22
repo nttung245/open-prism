@@ -22,6 +22,9 @@ export function applyEvent(
       return upsert(jobs, event.job);
     case "jobRemoved":
       return jobs.filter((job) => job.id !== event.id);
+    case "projectsChanged":
+      // Not about jobs: the project list reacts to it.
+      return jobs;
     case "resync":
       return "resync";
   }
