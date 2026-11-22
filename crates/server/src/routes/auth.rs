@@ -4,7 +4,7 @@
 use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use axum_extra::extract::CookieJar;
 use axum_extra::extract::cookie::{Cookie, SameSite};
@@ -72,6 +72,40 @@ pub fn routes() -> Router<AppState> {
         .route("/auth/session", get(session))
         .route("/auth/password", post(change_password))
         .route("/auth/links/{token}", get(show_link).post(use_link))
+        .route("/auth/sessions", get(list_sessions))
+        .route("/auth/sessions/{id}", delete(revoke_session))
+}
+
+/// The signed-in account's sessions, the current one marked.
+async fn list_sessions(
+    State(state): State<AppState>,
+    jar: CookieJar,
+    CurrentUser(principal): CurrentUser,
+) -> Result<Json<Vec<sessions::SessionView>>, ApiError> {
+    let user = principal
+        .user()
+        .ok_or_else(|| ApiError::not_found("sessions belong to accounts (server mode)"))?;
+    let current = jar
+        .get(SESSION_COOKIE)
+        .map(|cookie| sessions::hash_value(cookie.value()));
+    Ok(Json(
+        sessions::list(&state.db, &user.id, current.as_deref(), now_ms()).await?,
+    ))
+}
+
+/// Ends one of the signed-in account's sessions, such as a browser left signed in elsewhere.
+async fn revoke_session(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    let user = principal
+        .user()
+        .ok_or_else(|| ApiError::not_found("sessions belong to accounts (server mode)"))?;
+    if !sessions::revoke(&state.db, &user.id, &id).await? {
+        return Err(ApiError::not_found("no such session"));
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// What a one-time link is for, for its page.

@@ -5,7 +5,7 @@ mod ai;
 mod ai_tests;
 #[cfg(test)]
 mod api_tests;
-mod auth;
+pub(crate) mod auth;
 mod compile;
 mod files;
 mod health;
@@ -21,6 +21,7 @@ mod pdf_import_tests;
 mod projects;
 mod settings;
 mod synctex;
+mod users;
 
 use axum::Router;
 use axum::middleware;
@@ -41,7 +42,8 @@ pub fn router(state: AppState) -> Router {
         .merge(settings::routes())
         .merge(ai::routes())
         .merge(jobs::routes())
-        .merge(imports::routes());
+        .merge(imports::routes())
+        .merge(users::routes());
 
     Router::new()
         .nest("/api", api)

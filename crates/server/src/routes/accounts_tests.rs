@@ -629,3 +629,235 @@ async fn the_token_signs_no_browser_in_but_scripts_still_use_it() {
         .unwrap();
     assert_eq!(call(&app, script).await.status, StatusCode::CREATED);
 }
+
+fn patch(path: &str, cookie: &str, body: serde_json::Value) -> Request<Body> {
+    Request::patch(path)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ORIGIN, SITE)
+        .header(header::COOKIE, cookie)
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn delete(path: &str, cookie: &str) -> Request<Body> {
+    Request::delete(path)
+        .header(header::ORIGIN, SITE)
+        .header(header::COOKIE, cookie)
+        .body(Body::empty())
+        .unwrap()
+}
+
+#[tokio::test]
+async fn admins_create_accounts_with_a_link() {
+    let (app, state) = server().await;
+    account(&state, "lan", UserRole::Admin, "correct horse battery").await;
+    let admin = sign_in(&app, "lan", "correct horse battery").await;
+
+    let created = call(
+        &app,
+        post(
+            "/api/users",
+            Some(&admin),
+            serde_json::json!({ "username": "minh", "displayName": "Minh Le", "role": "user" }),
+        ),
+    )
+    .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.json);
+    assert_eq!(created.json["user"]["hasPassword"], false);
+    let link = created.json["link"].as_str().unwrap();
+    let token = link.strip_prefix(&format!("{SITE}/setup/")).expect(link);
+
+    let taken = call(
+        &app,
+        post(
+            "/api/users",
+            Some(&admin),
+            serde_json::json!({ "username": "MINH", "displayName": "Other", "role": "user" }),
+        ),
+    )
+    .await;
+    assert_eq!(taken.status, StatusCode::CONFLICT);
+
+    let set = call(
+        &app,
+        post(
+            &format!("/api/auth/links/{token}"),
+            None,
+            serde_json::json!({ "password": "minh's own password" }),
+        ),
+    )
+    .await;
+    assert_eq!(set.status, StatusCode::NO_CONTENT);
+    let listed = call(&app, get("/api/users", Some(&admin))).await;
+    let names: Vec<&str> = listed
+        .json
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["username"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["lan", "minh"]);
+    assert_eq!(listed.json[1]["hasPassword"], true);
+}
+
+#[tokio::test]
+async fn users_cannot_manage_accounts() {
+    let (app, state) = server().await;
+    let lan = account(&state, "lan", UserRole::Admin, "correct horse battery").await;
+    account(&state, "minh", UserRole::User, "minh's own password").await;
+    let minh = sign_in(&app, "minh", "minh's own password").await;
+    let attempts = [
+        get("/api/users", Some(&minh)),
+        post(
+            "/api/users",
+            Some(&minh),
+            serde_json::json!({ "username": "eve", "displayName": "Eve", "role": "admin" }),
+        ),
+        patch(
+            &format!("/api/users/{}", lan.id),
+            &minh,
+            serde_json::json!({ "disabled": true }),
+        ),
+        post(
+            &format!("/api/users/{}/link", lan.id),
+            Some(&minh),
+            serde_json::json!({}),
+        ),
+    ];
+    for request in attempts {
+        let reply = call(&app, request).await;
+        assert_eq!(reply.status, StatusCode::FORBIDDEN);
+        assert_eq!(reply.json["error"]["code"], "admins_only");
+    }
+    assert!(
+        !users::get(&state.db, &lan.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .disabled
+    );
+}
+
+#[tokio::test]
+async fn the_last_admin_stays() {
+    let (app, state) = server().await;
+    let lan = account(&state, "lan", UserRole::Admin, "correct horse battery").await;
+    let admin = sign_in(&app, "lan", "correct horse battery").await;
+    for change in [
+        serde_json::json!({ "role": "user" }),
+        serde_json::json!({ "disabled": true }),
+    ] {
+        let reply = call(
+            &app,
+            patch(&format!("/api/users/{}", lan.id), &admin, change),
+        )
+        .await;
+        assert_eq!(reply.status, StatusCode::CONFLICT);
+        assert_eq!(reply.json["error"]["code"], "last_admin");
+    }
+    // With a second admin, the first may step down.
+    let ha = account(&state, "ha", UserRole::Admin, "ha's own password").await;
+    let reply = call(
+        &app,
+        patch(
+            &format!("/api/users/{}", lan.id),
+            &admin,
+            serde_json::json!({ "role": "user" }),
+        ),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK);
+    assert_eq!(reply.json["role"], "user");
+    let _ = ha;
+}
+
+#[tokio::test]
+async fn locking_an_account_signs_it_out_at_once() {
+    let (app, state) = server().await;
+    account(&state, "lan", UserRole::Admin, "correct horse battery").await;
+    let minh_user = account(&state, "minh", UserRole::User, "minh's own password").await;
+    let admin = sign_in(&app, "lan", "correct horse battery").await;
+    let minh = sign_in(&app, "minh", "minh's own password").await;
+
+    let locked = call(
+        &app,
+        patch(
+            &format!("/api/users/{}", minh_user.id),
+            &admin,
+            serde_json::json!({ "disabled": true }),
+        ),
+    )
+    .await;
+    assert_eq!(locked.status, StatusCode::OK);
+    assert_eq!(locked.json["disabled"], true);
+    assert_eq!(
+        call(&app, get("/api/projects", Some(&minh))).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    let again = call(
+        &app,
+        post(
+            "/api/auth/login",
+            None,
+            serde_json::json!({ "username": "minh", "password": "minh's own password" }),
+        ),
+    )
+    .await;
+    assert_eq!(again.status, StatusCode::UNAUTHORIZED);
+
+    call(
+        &app,
+        patch(
+            &format!("/api/users/{}", minh_user.id),
+            &admin,
+            serde_json::json!({ "disabled": false }),
+        ),
+    )
+    .await;
+    sign_in(&app, "minh", "minh's own password").await;
+}
+
+#[tokio::test]
+async fn people_see_and_end_their_own_sessions() {
+    let (app, state) = server().await;
+    account(&state, "lan", UserRole::User, "correct horse battery").await;
+    account(&state, "minh", UserRole::User, "minh's own password").await;
+    let laptop = sign_in(&app, "lan", "correct horse battery").await;
+    let phone = sign_in(&app, "lan", "correct horse battery").await;
+    let minh = sign_in(&app, "minh", "minh's own password").await;
+
+    let listed = call(&app, get("/api/auth/sessions", Some(&laptop))).await;
+    let sessions = listed.json.as_array().unwrap();
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(sessions.iter().filter(|s| s["current"] == true).count(), 1);
+    let phone_hash = sessions::hash_value(phone.split_once('=').unwrap().1);
+    assert!(sessions.iter().any(|s| s["id"] == phone_hash.as_str()));
+
+    // Someone else's session is not theirs to end.
+    assert_eq!(
+        call(
+            &app,
+            delete(&format!("/api/auth/sessions/{phone_hash}"), &minh)
+        )
+        .await
+        .status,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            delete(&format!("/api/auth/sessions/{phone_hash}"), &laptop)
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        call(&app, get("/api/projects", Some(&phone))).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        call(&app, get("/api/projects", Some(&laptop))).await.status,
+        StatusCode::OK
+    );
+}
