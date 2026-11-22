@@ -11,6 +11,8 @@
 [![Docker image](https://img.shields.io/badge/docker-ghcr.io%2Fnttung245%2Fopen--prism-2496ED?logo=docker&logoColor=white)](https://github.com/nttung245/open-prism/pkgs/container/open-prism)
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
+**English** · [Tiếng Việt](README.vi.md) · [简体中文](README.zh-CN.md)
+
 [Quickstart](#quickstart) · [Features](#features) · [How it works](#how-it-works) · [Privacy](#privacy-and-security) · [Documentation](#documentation) · [Roadmap](#roadmap)
 
 <img src="assets/readme/workspace.webp" alt="Open Prism: the LaTeX source, the compiled PDF, and the AI assistant proposing two fixes as a diff to accept or reject" width="100%">
