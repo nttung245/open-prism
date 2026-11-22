@@ -177,7 +177,7 @@ pub async fn create(
         return Err(ApiError::internal(err));
     }
     let project = insert(state, &id, &name, DEFAULT_MAIN_FILE, owner).await?;
-    history::take_quietly(state, &id, SnapshotKind::Created, "Project created").await;
+    history::take_quietly(state, &id, SnapshotKind::Created, "Project created", owner).await;
     Ok(project)
 }
 
@@ -209,7 +209,7 @@ where
         Ok(main_file) => {
             let main_file = main_file.unwrap_or_else(|| DEFAULT_MAIN_FILE.to_owned());
             let project = insert(state, &id, &name, &main_file, owner).await?;
-            history::take_quietly(state, &id, SnapshotKind::Created, summary).await;
+            history::take_quietly(state, &id, SnapshotKind::Created, summary, owner).await;
             Ok(project)
         }
         Err(err) => {

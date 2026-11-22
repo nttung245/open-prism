@@ -51,7 +51,7 @@ async fn list(
 /// Saves a version with a label, even if nothing changed since the latest snapshot.
 async fn create(
     State(state): State<AppState>,
-    ProjectAccess { id, .. }: ProjectAccess,
+    ProjectAccess { id, principal, .. }: ProjectAccess,
     Json(request): Json<CreateSnapshotRequest>,
 ) -> Result<(StatusCode, Json<Snapshot>), ApiError> {
     projects::get(&state, &id).await?;
@@ -64,6 +64,7 @@ async fn create(
         summary,
         Some(label),
         true,
+        principal.user_id(),
     )
     .await?
     .ok_or_else(|| ApiError::internal("a forced snapshot was skipped"))?;
@@ -100,13 +101,13 @@ async fn diff(
 
 async fn restore(
     State(state): State<AppState>,
-    _access: ProjectAccess,
+    access: ProjectAccess,
     Path((id, rev)): Path<(String, String)>,
     request: Option<Json<RestoreRequest>>,
 ) -> Result<Json<RestoreResult>, ApiError> {
     projects::get(&state, &id).await?;
     let request = request.map(|Json(request)| request).unwrap_or_default();
     Ok(Json(
-        history::restore(&state, &id, &rev, request.paths).await?,
+        history::restore(&state, &id, &rev, request.paths, access.principal.user_id()).await?,
     ))
 }

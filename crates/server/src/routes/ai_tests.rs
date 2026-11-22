@@ -645,6 +645,15 @@ async fn ai_edits_are_bracketed_by_snapshots() {
     assert_eq!(page["snapshots"][0]["kind"], "aiEdit");
     assert_eq!(page["snapshots"][0]["summary"], "AI edit: Greet the reader");
     assert_eq!(page["snapshots"][0]["modified"], 1);
+    // Single-user mode records no author.
+    assert!(
+        page["snapshots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|snapshot| snapshot["author"].is_null()),
+        "{page}"
+    );
 
     // Nothing changed since: no new snapshot before this proposal, and rejecting everything
     // takes none either.
@@ -1522,5 +1531,231 @@ async fn image_to_latex_reports_a_model_without_image_input_as_an_http_error() {
             .unwrap()
             .contains("image input"),
         "{body}"
+    );
+}
+
+/// Server mode: every snapshot names whoever led to it (`version-history` spec).
+#[tokio::test]
+async fn snapshots_name_whoever_led_to_them() {
+    use super::accounts_tests::{account, call, get, post, server, sign_in};
+    use crate::members::{self, ProjectRole};
+    use crate::users::UserRole;
+
+    let (app, state) = server().await;
+    let llm = MockServer::start().await;
+    script(
+        &llm,
+        vec![
+            greet_proposal("call_1", "Start writing here.", "Hello from the AI."),
+            sse(&[text_chunk("Done."), finish("stop")]),
+        ],
+    )
+    .await;
+    account(&state, "lan", UserRole::User, "lan's own password").await;
+    let minh = account(&state, "minh", UserRole::User, "minh's own password").await;
+    let lan = sign_in(&app, "lan", "lan's own password").await;
+    let minh_cookie = sign_in(&app, "minh", "minh's own password").await;
+    let created = call(
+        &app,
+        post(
+            "/api/projects",
+            Some(&lan),
+            json!({ "name": "Paper", "template": "article" }),
+        ),
+    )
+    .await;
+    let project_id = created.json["id"].as_str().unwrap().to_owned();
+    members::add(&state.db, &project_id, &minh.id, ProjectRole::Member, 0)
+        .await
+        .unwrap();
+
+    // Whoever runs the server sets up the model with the access token.
+    let as_token = |method: Method, uri: &str, body: Value| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let provider = call(
+        &app,
+        as_token(
+            Method::POST,
+            "/api/settings/providers",
+            json!({"name": "Fake", "kind": "openai-compatible", "baseUrl": format!("{}/v1", llm.uri()), "apiKey": "sk-x"}),
+        ),
+    )
+    .await;
+    assert_eq!(provider.status, StatusCode::CREATED, "{}", provider.json);
+    let roles = call(
+        &app,
+        as_token(
+            Method::PUT,
+            "/api/settings/roles",
+            json!({"agent": {"providerId": provider.json["id"], "model": "fake-model"}}),
+        ),
+    )
+    .await;
+    assert_eq!(roles.status, StatusCode::OK, "{}", roles.json);
+
+    // Minh asks the assistant for an edit in Lan's project and accepts it.
+    let thread = call(
+        &app,
+        post(
+            "/api/ai/threads",
+            Some(&minh_cookie),
+            json!({ "projectId": project_id }),
+        ),
+    )
+    .await;
+    let thread_id = thread.json["id"].as_str().unwrap().to_owned();
+    // Changes since the latest snapshot, so the assistant's edit is preceded by one.
+    let main_tex = state.paths.project_dir(&project_id).join("main.tex");
+    let original = std::fs::read_to_string(&main_tex).unwrap();
+    std::fs::write(&main_tex, format!("% note\n{original}")).unwrap();
+    let sent = call(
+        &app,
+        post(
+            &format!("/api/ai/threads/{thread_id}/messages"),
+            Some(&minh_cookie),
+            json!({ "text": "Greet" }),
+        ),
+    )
+    .await;
+    assert_eq!(sent.status, StatusCode::OK);
+    let view = call(
+        &app,
+        get(&format!("/api/ai/threads/{thread_id}"), Some(&minh_cookie)),
+    )
+    .await;
+    let patch_id = view.json["patches"][0]["id"].as_str().unwrap().to_owned();
+    let edited = std::fs::read_to_string(&main_tex)
+        .unwrap()
+        .replace("Start writing here.", "Hello from the AI.");
+    std::fs::write(&main_tex, edited).unwrap();
+    let decided = call(
+        &app,
+        post(
+            &format!("/api/ai/threads/{thread_id}/decisions"),
+            Some(&minh_cookie),
+            json!({"decisions": [{"patchId": patch_id, "accepted": [true]}]}),
+        ),
+    )
+    .await;
+    assert_eq!(decided.status, StatusCode::OK);
+
+    // Lan saves a version; Minh restores the first snapshot.
+    let saved = call(
+        &app,
+        post(
+            &format!("/api/projects/{project_id}/history"),
+            Some(&lan),
+            json!({ "label": "Draft" }),
+        ),
+    )
+    .await;
+    assert_eq!(saved.status, StatusCode::CREATED, "{}", saved.json);
+    assert_eq!(saved.json["author"]["displayName"], "lan display");
+
+    let page = call(
+        &app,
+        get(&format!("/api/projects/{project_id}/history"), Some(&lan)),
+    )
+    .await;
+    let first = page.json["snapshots"].as_array().unwrap().last().unwrap()["rev"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    std::fs::write(&main_tex, "changed after the draft").unwrap();
+    let restored = call(
+        &app,
+        post(
+            &format!("/api/projects/{project_id}/history/{first}/restore"),
+            Some(&minh_cookie),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(restored.status, StatusCode::OK, "{}", restored.json);
+
+    let page = call(
+        &app,
+        get(&format!("/api/projects/{project_id}/history"), Some(&lan)),
+    )
+    .await;
+    let timeline: Vec<(&str, &str)> = page.json["snapshots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|snapshot| {
+            (
+                snapshot["kind"].as_str().unwrap(),
+                snapshot["author"]["displayName"].as_str().unwrap_or("-"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        timeline,
+        [
+            ("restored", "minh display"),
+            ("beforeRestore", "minh display"),
+            ("manual", "lan display"),
+            ("aiEdit", "minh display"),
+            ("beforeAiEdit", "minh display"),
+            ("created", "lan display"),
+        ]
+    );
+    assert_eq!(page.json["snapshots"][3]["author"]["id"], minh.id.as_str());
+    // The git commit of the assistant's edit has Minh's name as its author too.
+    let ai_edit = page.json["snapshots"][3]["rev"].as_str().unwrap();
+    match std::process::Command::new("git")
+        .arg("--git-dir")
+        .arg(state.paths.history_dir(&project_id))
+        .args(["log", "-1", "--format=%an|%cn", ai_edit])
+        .output()
+    {
+        Ok(out) => assert_eq!(
+            String::from_utf8_lossy(&out.stdout).trim(),
+            "minh display|Open Prism"
+        ),
+        Err(err) => eprintln!("git is not installed, the commit author is not checked: {err}"),
+    }
+
+    // The name follows the account: a new display name shows everywhere, and a deleted
+    // account leaves the snapshots without an author.
+    sqlx::query("UPDATE users SET display_name = 'Minh Tran' WHERE id = ?")
+        .bind(&minh.id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let page = call(
+        &app,
+        get(&format!("/api/projects/{project_id}/history"), Some(&lan)),
+    )
+    .await;
+    assert_eq!(
+        page.json["snapshots"][0]["author"]["displayName"],
+        "Minh Tran"
+    );
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(&minh.id)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let page = call(
+        &app,
+        get(&format!("/api/projects/{project_id}/history"), Some(&lan)),
+    )
+    .await;
+    assert!(
+        page.json["snapshots"][0]["author"].is_null(),
+        "{}",
+        page.json
+    );
+    assert_eq!(
+        page.json["snapshots"][2]["author"]["displayName"],
+        "lan display"
     );
 }

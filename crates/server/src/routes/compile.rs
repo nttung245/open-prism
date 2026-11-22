@@ -38,10 +38,12 @@ pub fn routes() -> Router<AppState> {
 
 async fn start(
     State(state): State<AppState>,
-    ProjectAccess { id, .. }: ProjectAccess,
+    ProjectAccess { id, principal, .. }: ProjectAccess,
 ) -> Result<(StatusCode, Json<CompileStarted>), ApiError> {
     let project = projects::get(&state, &id).await?;
-    let run_id = state.compiler.start(&state, &project)?;
+    let run_id = state
+        .compiler
+        .start(&state, &project, principal.user_id())?;
     projects::touch(&state, &id).await?;
     Ok((StatusCode::ACCEPTED, Json(CompileStarted { run_id })))
 }

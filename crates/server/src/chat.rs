@@ -244,6 +244,14 @@ pub async fn thread_owner(
         .ok_or_else(|| ApiError::not_found("no such conversation"))
 }
 
+/// Who started a conversation, for the snapshots its edits make; only they can use it (D7).
+async fn thread_author(state: &AppState, id: &str) -> Option<String> {
+    thread_owner(state, id)
+        .await
+        .ok()
+        .and_then(|(_, user)| user)
+}
+
 pub async fn delete_thread(state: &AppState, id: &str) -> Result<(), ApiError> {
     let summary = thread(state, id).await?;
     sqlx::query("DELETE FROM ai_threads WHERE id = ?")
@@ -550,7 +558,15 @@ async fn record_decisions(
     if !accepted.is_empty() {
         accepted.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.id.cmp(&b.id)));
         let summary = ai_edit_summary(&accepted);
-        history::take_quietly(state, &project_id, SnapshotKind::AiEdit, &summary).await;
+        let author = thread_author(state, thread_id).await;
+        history::take_quietly(
+            state,
+            &project_id,
+            SnapshotKind::AiEdit,
+            &summary,
+            author.as_deref(),
+        )
+        .await;
     }
     Ok(())
 }
@@ -781,7 +797,15 @@ async fn run_and_save(
     let status = result.status.unwrap_or(DoneStatus::Complete);
     if status == DoneStatus::AwaitingApproval && !result.patches.is_empty() {
         let summary = format!("Before AI edit of {}", files_of(&result.patches));
-        history::take_quietly(state, &project.id, SnapshotKind::BeforeAiEdit, &summary).await;
+        let author = thread_author(state, thread_id).await;
+        history::take_quietly(
+            state,
+            &project.id,
+            SnapshotKind::BeforeAiEdit,
+            &summary,
+            author.as_deref(),
+        )
+        .await;
     }
     let error = result.error.map(|err| (err.to_string(), err.retryable()));
     Ok((status, error))
