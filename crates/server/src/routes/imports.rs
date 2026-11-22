@@ -68,15 +68,18 @@ async fn import_pdf(
 
     // Checked once the upload is read: a reply sent while the browser is still sending the file
     // breaks the connection, and the page would show a network error instead of this message.
-    let model = settings::roles(&state).await?.agent.ok_or_else(|| {
-        ApiError::new(
-            StatusCode::BAD_REQUEST,
-            // The page shows a link to Settings for this code.
-            "no_model",
-            "choose a model for Agent in Settings first: importing a PDF has the Agent read \
+    let model = settings::roles_for(&state, principal.user_id())
+        .await?
+        .agent
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::BAD_REQUEST,
+                // The page shows a link to Settings for this code.
+                "no_model",
+                "choose a model for Agent in Settings first: importing a PDF has the Agent read \
              every page",
-        )
-    })?;
+            )
+        })?;
 
     // A PDF Open Prism can read, and its number of pages.
     let path = temp.path().to_path_buf();

@@ -356,17 +356,25 @@ async fn append(state: &AppState, thread_id: &str, message: &Message) -> Result<
     Ok(())
 }
 
+/// The model of a turn: the one asked for, if `user_id` may use its provider, or their Agent.
 async fn resolve_model(
     state: &AppState,
+    user_id: Option<&str>,
     requested: Option<ModelRef>,
 ) -> Result<ModelRef, ApiError> {
     match requested {
-        Some(model) => Ok(model),
-        None => settings::roles(state).await?.agent.ok_or_else(|| {
-            ApiError::bad_request(
-                "no model is set up: add a provider and choose a model in Settings",
-            )
-        }),
+        Some(model) => {
+            settings::check_usable(state, user_id, &model).await?;
+            Ok(model)
+        }
+        None => settings::roles_for(state, user_id)
+            .await?
+            .agent
+            .ok_or_else(|| {
+                ApiError::bad_request(
+                    "no model is set up: add a provider and choose a model in Settings",
+                )
+            }),
     }
 }
 
@@ -390,7 +398,9 @@ async fn prepare(
 ) -> Result<Prepared, ApiError> {
     let summary = thread(state, thread_id).await?;
     let project = projects::get(state, &summary.project_id).await?;
-    let model_ref = resolve_model(state, requested).await?;
+    // Only its creator reaches a conversation (D7): the turn runs with their models.
+    let (_, creator) = thread_owner(state, thread_id).await?;
+    let model_ref = resolve_model(state, creator.as_deref(), requested).await?;
     let config = settings::config(state, &model_ref.provider_id).await?;
     let model = Model::new(&config, &model_ref.model)
         .map_err(|err| ApiError::bad_request(err.to_string()))?;
@@ -888,8 +898,10 @@ pub struct InlineRequest {
 
 const MAX_INLINE_CHARS: usize = 20_000;
 
+/// A quick action on a selection, with the models of `user_id` (server mode).
 pub async fn inline(
     state: &AppState,
+    user_id: Option<&str>,
     request: InlineRequest,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
     projects::get(state, &request.project_id).await?;
@@ -902,9 +914,12 @@ pub async fn inline(
         ));
     }
     let model_ref = match request.model {
-        Some(model) => model,
+        Some(model) => {
+            settings::check_usable(state, user_id, &model).await?;
+            model
+        }
         None => {
-            let roles = settings::roles(state).await?;
+            let roles = settings::roles_for(state, user_id).await?;
             roles.fast.or(roles.agent).ok_or_else(|| {
                 ApiError::bad_request(
                     "no model is set up: add a provider and choose a model in Settings",

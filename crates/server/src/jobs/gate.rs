@@ -170,6 +170,7 @@ impl JobContext {
         model: &ModelRef,
         request: LlmRequest,
     ) -> Result<AiAnswer, JobError> {
+        let model = &self.usable_model(model).await?;
         let gate = self.state.jobs.gate.provider(&model.provider_id);
         loop {
             let pause = gate.limit().paused_until(Instant::now());
@@ -240,6 +241,43 @@ async fn ask(state: &AppState, model: &ModelRef, request: LlmRequest) -> Result<
         }
     }
     Ok(answer)
+}
+
+impl JobContext {
+    /// The model to ask: the one the job started with, while whoever started it may still use
+    /// its provider (design D8); else their Agent choice now, so a job that failed for this runs
+    /// again once they choose another model. Nobody's job reaches someone else's key.
+    async fn usable_model(&self, model: &ModelRef) -> Result<ModelRef, JobError> {
+        let user = self.user_id.as_deref();
+        let db_error = |err: crate::error::ApiError| JobError::Retryable(format!("{err:?}"));
+        if settings::may_use(&self.state, user, &model.provider_id)
+            .await
+            .map_err(db_error)?
+        {
+            return Ok(model.clone());
+        }
+        if let Some(current) = settings::roles_for(&self.state, user)
+            .await
+            .map_err(db_error)?
+            .agent
+            && settings::may_use(&self.state, user, &current.provider_id)
+                .await
+                .map_err(db_error)?
+        {
+            tracing::info!(
+                job = %self.id,
+                from = %model.provider_id,
+                to = %current.provider_id,
+                "the job's provider is no longer usable: using the current Agent choice"
+            );
+            return Ok(current);
+        }
+        Err(JobError::Fatal(
+            "the model this job started with is no longer available: choose a model for Agent \
+             in Settings, then run the job again"
+                .into(),
+        ))
+    }
 }
 
 #[cfg(test)]

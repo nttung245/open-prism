@@ -21,6 +21,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/settings/providers/{id}/test", post(test))
         .route("/settings/roles", get(roles).put(set_roles))
+        .route(
+            "/settings/default-roles",
+            get(default_roles).put(set_default_roles),
+        )
 }
 
 async fn kinds() -> Json<Vec<ProviderKindInfo>> {
@@ -82,13 +86,46 @@ async fn test(
     Ok(Json(settings::test(&state, &principal, &id).await?))
 }
 
-async fn roles(State(state): State<AppState>) -> Result<Json<Roles>, ApiError> {
-    Ok(Json(settings::roles(&state).await?))
+/// The caller's own choices: for an account, what it chose (`null` where it uses the default);
+/// in single-user mode and with the access token, the defaults.
+async fn roles(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+) -> Result<Json<Roles>, ApiError> {
+    Ok(Json(match principal.user() {
+        Some(user) => settings::personal_roles(&state, &user.id).await?,
+        None => settings::default_roles(&state).await?,
+    }))
 }
 
 async fn set_roles(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Json(roles): Json<Roles>,
 ) -> Result<Json<Roles>, ApiError> {
-    Ok(Json(settings::set_roles(&state, roles).await?))
+    Ok(Json(match principal.user() {
+        Some(user) => settings::set_personal_roles(&state, &user.id, roles).await?,
+        None => settings::set_default_roles(&state, roles).await?,
+    }))
+}
+
+/// What everyone without a choice of their own uses.
+async fn default_roles(State(state): State<AppState>) -> Result<Json<Roles>, ApiError> {
+    Ok(Json(settings::default_roles(&state).await?))
+}
+
+/// Admins set the defaults, with shared providers.
+async fn set_default_roles(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Json(roles): Json<Roles>,
+) -> Result<Json<Roles>, ApiError> {
+    if !principal.is_admin() {
+        return Err(ApiError::new(
+            StatusCode::FORBIDDEN,
+            "admins_only",
+            "only an admin can change the default models; choose your own under Models",
+        ));
+    }
+    Ok(Json(settings::set_default_roles(&state, roles).await?))
 }

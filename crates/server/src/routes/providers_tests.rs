@@ -231,3 +231,238 @@ async fn admins_share_providers_and_personal_ones_stay_private() {
         StatusCode::NO_CONTENT
     );
 }
+
+/// A fake OpenAI-compatible endpoint that answers every chat request with `text`.
+async fn fake_llm(text: &str) -> wiremock::MockServer {
+    use wiremock::matchers::{method, path};
+    let server = wiremock::MockServer::start().await;
+    let chunk = json!({"id": "x", "object": "chat.completion.chunk", "created": 1, "model": "m",
+        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": "stop"}]});
+    wiremock::Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(format!("data: {chunk}\n\ndata: [DONE]\n\n")),
+        )
+        .mount(&server)
+        .await;
+    server
+}
+
+/// The models and keys of the requests `server` received.
+async fn asked(server: &wiremock::MockServer) -> Vec<(String, String)> {
+    server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| {
+            let body: Value = serde_json::from_slice(&request.body).unwrap();
+            let key = request
+                .headers
+                .get("authorization")
+                .map(|value| value.to_str().unwrap().to_owned())
+                .unwrap_or_default();
+            (body["model"].as_str().unwrap().to_owned(), key)
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn each_person_uses_their_own_model_or_the_default() {
+    let (app, state) = server().await;
+    account(&state, "boss", UserRole::Admin, "the admin password").await;
+    account(&state, "lan", UserRole::User, "lan's own password").await;
+    account(&state, "minh", UserRole::User, "minh's own password").await;
+    let boss = sign_in(&app, "boss", "the admin password").await;
+    let lan = sign_in(&app, "lan", "lan's own password").await;
+    let minh = sign_in(&app, "minh", "minh's own password").await;
+    let shared_llm = fake_llm("shared answer").await;
+    let minh_llm = fake_llm("minh's answer").await;
+    let add = |name: &str, server: &wiremock::MockServer, key: &str, shared: Option<bool>| {
+        let mut body = provider(name, key, shared);
+        body["baseUrl"] = json!(format!("{}/v1", server.uri()));
+        body
+    };
+    let providers = "/api/settings/providers";
+
+    // The admin shares a provider and makes it the default; only admins set defaults, and only
+    // with shared providers.
+    let shared = call(
+        &app,
+        post(
+            providers,
+            Some(&boss),
+            add("Lab", &shared_llm, "sk-shared", Some(true)),
+        ),
+    )
+    .await;
+    let shared_id = shared.json["id"].as_str().unwrap().to_owned();
+    let boss_own = call(
+        &app,
+        post(
+            providers,
+            Some(&boss),
+            add("Boss's", &shared_llm, "sk-boss", None),
+        ),
+    )
+    .await;
+    let defaults = "/api/settings/default-roles";
+    let agent = |provider: &str, model: &str| json!({ "agent": { "providerId": provider, "model": model } });
+    let by_user = call(
+        &app,
+        send(Method::PUT, defaults, &lan, Some(agent(&shared_id, "x"))),
+    )
+    .await;
+    assert_eq!(by_user.status, StatusCode::FORBIDDEN);
+    let personal_default = call(
+        &app,
+        send(
+            Method::PUT,
+            defaults,
+            &boss,
+            Some(agent(boss_own.json["id"].as_str().unwrap(), "x")),
+        ),
+    )
+    .await;
+    assert_eq!(personal_default.status, StatusCode::BAD_REQUEST);
+    let set = call(
+        &app,
+        send(
+            Method::PUT,
+            defaults,
+            &boss,
+            Some(agent(&shared_id, "shared-model")),
+        ),
+    )
+    .await;
+    assert_eq!(set.status, StatusCode::OK, "{}", set.json);
+
+    // Minh has chosen nothing: he gets the default.
+    let paper = call(
+        &app,
+        post(
+            "/api/projects",
+            Some(&minh),
+            json!({ "name": "Paper", "template": "blank" }),
+        ),
+    )
+    .await
+    .json["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let rewrite = |cookie: &str, project: &str, model: Option<Value>| {
+        let mut body = json!({ "projectId": project, "action": "rewrite", "text": "Some text." });
+        if let Some(model) = model {
+            body["model"] = model;
+        }
+        post("/api/ai/inline", Some(cookie), body)
+    };
+    let mine = call(&app, get("/api/settings/roles", Some(&minh))).await;
+    assert_eq!(mine.json, json!({ "agent": null, "fast": null }));
+    assert_eq!(
+        call(&app, rewrite(&minh, &paper, None)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        asked(&shared_llm).await,
+        [("shared-model".to_owned(), "Bearer sk-shared".to_owned())]
+    );
+
+    // Minh adds his own key and model: his requests go there, with his key.
+    let own = call(
+        &app,
+        post(
+            providers,
+            Some(&minh),
+            add("Mine", &minh_llm, "sk-minh", None),
+        ),
+    )
+    .await;
+    let own_id = own.json["id"].as_str().unwrap().to_owned();
+    let chosen = call(
+        &app,
+        send(
+            Method::PUT,
+            "/api/settings/roles",
+            &minh,
+            Some(agent(&own_id, "minh-model")),
+        ),
+    )
+    .await;
+    assert_eq!(chosen.status, StatusCode::OK, "{}", chosen.json);
+    assert_eq!(chosen.json["agent"]["providerId"], own_id.as_str());
+    let shown = call(&app, get(defaults, Some(&minh))).await;
+    assert_eq!(shown.json["agent"]["model"], "shared-model");
+    assert_eq!(
+        call(&app, rewrite(&minh, &paper, None)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        asked(&minh_llm).await,
+        [("minh-model".to_owned(), "Bearer sk-minh".to_owned())]
+    );
+    assert_eq!(asked(&shared_llm).await.len(), 1);
+
+    // Nobody else reaches Minh's provider: not as a choice, not named in a request.
+    let lan_paper = call(
+        &app,
+        post(
+            "/api/projects",
+            Some(&lan),
+            json!({ "name": "Lan's", "template": "blank" }),
+        ),
+    )
+    .await
+    .json["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let stolen_choice = call(
+        &app,
+        send(
+            Method::PUT,
+            "/api/settings/roles",
+            &lan,
+            Some(agent(&own_id, "minh-model")),
+        ),
+    )
+    .await;
+    assert_eq!(stolen_choice.status, StatusCode::NOT_FOUND);
+    let named = call(
+        &app,
+        rewrite(
+            &lan,
+            &lan_paper,
+            Some(json!({ "providerId": own_id, "model": "minh-model" })),
+        ),
+    )
+    .await;
+    assert_eq!(named.status, StatusCode::NOT_FOUND);
+    assert_eq!(asked(&minh_llm).await.len(), 1);
+
+    // Minh deletes his provider: back to the default.
+    assert_eq!(
+        call(
+            &app,
+            send(
+                Method::DELETE,
+                &format!("{providers}/{own_id}"),
+                &minh,
+                None
+            )
+        )
+        .await
+        .status,
+        StatusCode::NO_CONTENT
+    );
+    let mine = call(&app, get("/api/settings/roles", Some(&minh))).await;
+    assert!(mine.json["agent"].is_null(), "{}", mine.json);
+    assert_eq!(
+        call(&app, rewrite(&minh, &paper, None)).await.status,
+        StatusCode::OK
+    );
+    assert_eq!(asked(&shared_llm).await.len(), 2);
+}

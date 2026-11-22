@@ -90,6 +90,7 @@ references themselves. If nothing useful can be added, reply with nothing.";
 /// request) are HTTP errors; a failure while it writes is an `error` event.
 pub async fn complete(
     state: &AppState,
+    user_id: Option<&str>,
     request: CompletionRequest,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>> + use<>>, ApiError> {
     projects::get(state, &request.project_id).await?;
@@ -107,7 +108,7 @@ pub async fn complete(
     if request.prefix.trim().is_empty() && request.suffix.trim().is_empty() {
         return Err(ApiError::bad_request("there is no text around the cursor"));
     }
-    let roles = settings::roles(state).await?;
+    let roles = settings::roles_for(state, user_id).await?;
     let model_ref = roles.fast.or(roles.agent).ok_or_else(|| {
         ApiError::bad_request("no model is set up: add a provider and choose a model in Settings")
     })?;

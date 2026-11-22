@@ -364,10 +364,7 @@ pub async fn test(
     })
 }
 
-pub async fn roles(state: &AppState) -> Result<Roles, ApiError> {
-    let rows = sqlx::query("SELECT role, provider_id, model, reasoning FROM roles")
-        .fetch_all(&state.db)
-        .await?;
+fn role_rows(rows: Vec<SqliteRow>) -> Result<Roles, ApiError> {
     let mut roles = Roles::default();
     for row in rows {
         let role: String = row.try_get("role")?;
@@ -386,16 +383,133 @@ pub async fn roles(state: &AppState) -> Result<Roles, ApiError> {
     Ok(roles)
 }
 
-pub async fn set_roles(state: &AppState, roles: Roles) -> Result<Roles, ApiError> {
+/// The default choices (table `roles`): what everyone without a choice of their own uses. In
+/// single-user mode, the only choices.
+pub async fn default_roles(state: &AppState) -> Result<Roles, ApiError> {
+    let rows = sqlx::query("SELECT role, provider_id, model, reasoning FROM roles")
+        .fetch_all(&state.db)
+        .await?;
+    role_rows(rows)
+}
+
+/// The choices an account made for itself (table `user_roles`); `None` where it uses the default.
+pub async fn personal_roles(state: &AppState, user_id: &str) -> Result<Roles, ApiError> {
+    let rows =
+        sqlx::query("SELECT role, provider_id, model, reasoning FROM user_roles WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_all(&state.db)
+            .await?;
+    role_rows(rows)
+}
+
+/// The models `user_id` works with: their own choice for each role, or the default. `None`
+/// (single-user mode, the access token) gets the defaults. A personal choice whose provider was
+/// deleted is gone with it, so the default takes over.
+pub async fn roles_for(state: &AppState, user_id: Option<&str>) -> Result<Roles, ApiError> {
+    let defaults = default_roles(state).await?;
+    let Some(user_id) = user_id else {
+        return Ok(defaults);
+    };
+    let own = personal_roles(state, user_id).await?;
+    Ok(Roles {
+        agent: own.agent.or(defaults.agent),
+        fast: own.fast.or(defaults.fast),
+    })
+}
+
+/// Whether `user_id` may use the provider `id`: a shared one, or their own. `None` (single-user
+/// mode, the access token) may use any provider that exists.
+pub async fn may_use(state: &AppState, user_id: Option<&str>, id: &str) -> Result<bool, ApiError> {
+    let found: Option<String> = sqlx::query_scalar(
+        "SELECT id FROM providers
+         WHERE id = ?1 AND (?2 IS NULL OR owner_user_id IS NULL OR owner_user_id = ?2)",
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(found.is_some())
+}
+
+/// A model asked for by name in a request (a chat message, a quick action): its provider must
+/// be one `user_id` may use, or it does not exist for them.
+pub async fn check_usable(
+    state: &AppState,
+    user_id: Option<&str>,
+    model: &ModelRef,
+) -> Result<(), ApiError> {
+    if may_use(state, user_id, &model.provider_id).await? {
+        Ok(())
+    } else {
+        Err(ApiError::not_found("no such provider"))
+    }
+}
+
+async fn write_roles(
+    state: &AppState,
+    user_id: Option<&str>,
+    roles: Roles,
+    shared_only: bool,
+) -> Result<(), ApiError> {
+    let mut tx = state.db.begin().await?;
     for (role, model) in [("agent", roles.agent), ("fast", roles.fast)] {
-        match model {
-            Some(model) => {
-                get(state, &model.provider_id).await?;
-                if model.model.trim().is_empty() {
-                    return Err(ApiError::bad_request(format!(
-                        "choose a model for the {role} role"
-                    )));
+        let Some(model) = model else {
+            match user_id {
+                Some(user_id) => {
+                    sqlx::query("DELETE FROM user_roles WHERE user_id = ? AND role = ?")
+                        .bind(user_id)
+                        .bind(role)
+                        .execute(&mut *tx)
+                        .await?
                 }
+                None => {
+                    sqlx::query("DELETE FROM roles WHERE role = ?")
+                        .bind(role)
+                        .execute(&mut *tx)
+                        .await?
+                }
+            };
+            continue;
+        };
+        let owner: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT owner_user_id FROM providers
+             WHERE id = ?1 AND (?2 IS NULL OR owner_user_id IS NULL OR owner_user_id = ?2)",
+        )
+        .bind(&model.provider_id)
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some(owner) = owner else {
+            return Err(ApiError::not_found("no such provider"));
+        };
+        if shared_only && owner.is_some() {
+            return Err(ApiError::bad_request(
+                "the defaults use shared providers: everyone must be able to use them",
+            ));
+        }
+        if model.model.trim().is_empty() {
+            return Err(ApiError::bad_request(format!(
+                "choose a model for the {role} role"
+            )));
+        }
+        let reasoning = model.reasoning.map(ReasoningLevel::as_str);
+        match user_id {
+            Some(user_id) => {
+                sqlx::query(
+                    "INSERT INTO user_roles (user_id, role, provider_id, model, reasoning)
+                     VALUES (?, ?, ?, ?, ?)
+                     ON CONFLICT (user_id, role) DO UPDATE SET provider_id = excluded.provider_id,
+                         model = excluded.model, reasoning = excluded.reasoning",
+                )
+                .bind(user_id)
+                .bind(role)
+                .bind(&model.provider_id)
+                .bind(model.model.trim())
+                .bind(reasoning)
+                .execute(&mut *tx)
+                .await?
+            }
+            None => {
                 sqlx::query(
                     "INSERT INTO roles (role, provider_id, model, reasoning) VALUES (?, ?, ?, ?)
                      ON CONFLICT (role) DO UPDATE SET provider_id = excluded.provider_id,
@@ -404,19 +518,32 @@ pub async fn set_roles(state: &AppState, roles: Roles) -> Result<Roles, ApiError
                 .bind(role)
                 .bind(&model.provider_id)
                 .bind(model.model.trim())
-                .bind(model.reasoning.map(ReasoningLevel::as_str))
-                .execute(&state.db)
-                .await?;
+                .bind(reasoning)
+                .execute(&mut *tx)
+                .await?
             }
-            None => {
-                sqlx::query("DELETE FROM roles WHERE role = ?")
-                    .bind(role)
-                    .execute(&state.db)
-                    .await?;
-            }
-        }
+        };
     }
-    self::roles(state).await
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Sets the default choices, with shared providers only (any provider in single-user mode, where
+/// all are shared).
+pub async fn set_default_roles(state: &AppState, roles: Roles) -> Result<Roles, ApiError> {
+    write_roles(state, None, roles, true).await?;
+    default_roles(state).await
+}
+
+/// Sets the choices of an account, with providers it may use; `None` for a role goes back to
+/// the default.
+pub async fn set_personal_roles(
+    state: &AppState,
+    user_id: &str,
+    roles: Roles,
+) -> Result<Roles, ApiError> {
+    write_roles(state, Some(user_id), roles, false).await?;
+    personal_roles(state, user_id).await
 }
 
 /// Whether the model is known to reject tool calls.

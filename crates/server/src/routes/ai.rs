@@ -133,7 +133,7 @@ async fn inline(
     Json(request): Json<InlineRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     members::authorize(&state, &principal, &request.project_id, Action::Use).await?;
-    chat::inline(&state, request).await
+    chat::inline(&state, principal.user_id(), request).await
 }
 
 /// An image sent in a conversation, by the id its message lists.
@@ -168,7 +168,7 @@ async fn complete(
     Json(request): Json<CompletionRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     members::authorize(&state, &principal, &request.project_id, Action::Use).await?;
-    completion::complete(&state, request).await
+    completion::complete(&state, principal.user_id(), request).await
 }
 
 /// Server-sent `ImageLatexEvent`s: the LaTeX transcription of an image, to insert in the editor.
@@ -178,5 +178,5 @@ async fn image_to_latex(
     Json(request): Json<ImageLatexRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     members::authorize(&state, &principal, &request.project_id, Action::Use).await?;
-    image_latex::image_to_latex(&state, request).await
+    image_latex::image_to_latex(&state, principal.user_id(), request).await
 }
