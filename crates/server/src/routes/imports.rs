@@ -12,6 +12,7 @@ use openprism_core::pdf_pages::{MAX_PDF_BYTES, parse_pages};
 use openprism_core::pdf_render::PdfDocument;
 use tokio::io::AsyncWriteExt;
 
+use crate::auth::CurrentUser;
 use crate::error::ApiError;
 use crate::jobs::pdf_import::{KIND, PdfImportParams};
 use crate::jobs::{self, store::JobView};
@@ -34,6 +35,7 @@ pub fn routes() -> Router<AppState> {
 /// `pages` (such as `1-5, 8`; every page when absent).
 async fn import_pdf(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<JobView>), ApiError> {
     let mut name: Option<String> = None;
@@ -128,6 +130,7 @@ async fn import_pdf(
     let params = serde_json::to_value(params).map_err(ApiError::internal)?;
     let job = jobs::create_prepared(
         &state,
+        principal.user_id(),
         KIND,
         &format!("Import {file_name}"),
         &params,

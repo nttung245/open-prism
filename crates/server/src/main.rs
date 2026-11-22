@@ -12,6 +12,7 @@ mod images;
 mod jobs;
 mod links;
 mod login_limit;
+mod members;
 mod mode;
 mod passwords;
 mod projects;

@@ -144,6 +144,7 @@ impl Import {
         let bytes = pdf(pdf_pages);
         crate::jobs::create_prepared(
             &self.app.state,
+            None,
             KIND,
             "Import paper.pdf",
             &serde_json::to_value(params).unwrap(),

@@ -9,6 +9,7 @@ use axum::{Json, Router};
 use futures_util::Stream;
 use serde::Deserialize;
 
+use crate::auth::{CurrentUser, Principal};
 use crate::chat::{
     self, CreateThreadRequest, DecisionsRequest, InlineRequest, SendMessageRequest, ThreadSummary,
     ThreadView,
@@ -17,7 +18,15 @@ use crate::completion::{self, CompletionRequest};
 use crate::error::ApiError;
 use crate::image_latex::{self, ImageLatexRequest};
 use crate::images;
+use crate::members::{self, Action};
 use crate::state::AppState;
+
+/// The project behind a conversation must be one the principal may use.
+async fn thread_access(state: &AppState, principal: &Principal, id: &str) -> Result<(), ApiError> {
+    let thread = chat::thread(state, id).await?;
+    members::authorize(state, principal, &thread.project_id, Action::Use).await?;
+    Ok(())
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -50,15 +59,19 @@ pub fn routes() -> Router<AppState> {
 
 async fn list(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Query(query): Query<ThreadsQuery>,
 ) -> Result<Json<Vec<ThreadSummary>>, ApiError> {
+    members::authorize(&state, &principal, &query.project_id, Action::Use).await?;
     Ok(Json(chat::list_threads(&state, &query.project_id).await?))
 }
 
 async fn create(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Json(request): Json<CreateThreadRequest>,
 ) -> Result<(StatusCode, Json<ThreadSummary>), ApiError> {
+    members::authorize(&state, &principal, &request.project_id, Action::Use).await?;
     Ok((
         StatusCode::CREATED,
         Json(chat::create_thread(&state, &request.project_id).await?),
@@ -67,15 +80,19 @@ async fn create(
 
 async fn show(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Json<ThreadView>, ApiError> {
+    thread_access(&state, &principal, &id).await?;
     Ok(Json(chat::view(&state, &id).await?))
 }
 
 async fn remove(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    thread_access(&state, &principal, &id).await?;
     chat::delete_thread(&state, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -83,32 +100,40 @@ async fn remove(
 /// Server-sent `ChatEvent`s until `done`.
 async fn send(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
     Json(request): Json<SendMessageRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    thread_access(&state, &principal, &id).await?;
     chat::send_message(&state, &id, request).await
 }
 
 async fn decide(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
     Json(request): Json<DecisionsRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    thread_access(&state, &principal, &id).await?;
     chat::decide(&state, &id, request).await
 }
 
 async fn inline(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Json(request): Json<InlineRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    members::authorize(&state, &principal, &request.project_id, Action::Use).await?;
     chat::inline(&state, request).await
 }
 
 /// An image sent in a conversation, by the id its message lists.
 async fn image(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path((thread_id, image_id)): Path<(String, String)>,
 ) -> Result<Response, ApiError> {
+    thread_access(&state, &principal, &thread_id).await?;
     let thread = chat::thread(&state, &thread_id).await?;
     let dir = state
         .paths
@@ -130,15 +155,19 @@ async fn image(
 /// Server-sent `CompletionEvent`s: a suggestion to continue the text at the editor cursor.
 async fn complete(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Json(request): Json<CompletionRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    members::authorize(&state, &principal, &request.project_id, Action::Use).await?;
     completion::complete(&state, request).await
 }
 
 /// Server-sent `ImageLatexEvent`s: the LaTeX transcription of an image, to insert in the editor.
 async fn image_to_latex(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Json(request): Json<ImageLatexRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    members::authorize(&state, &principal, &request.project_id, Action::Use).await?;
     image_latex::image_to_latex(&state, request).await
 }

@@ -71,6 +71,8 @@ pub struct JobView {
 pub struct JobRow {
     pub view: JobView,
     pub params: serde_json::Value,
+    /// Who started the job (server mode); `None` in single-user mode.
+    pub user_id: Option<String>,
 }
 
 fn from_row(row: &SqliteRow) -> Result<JobRow, sqlx::Error> {
@@ -98,6 +100,7 @@ fn from_row(row: &SqliteRow) -> Result<JobRow, sqlx::Error> {
             finished_at: row.try_get("finished_at")?,
         },
         params: serde_json::from_str(&params).map_err(|err| sqlx::Error::Decode(Box::new(err)))?,
+        user_id: row.try_get("user_id")?,
     })
 }
 
@@ -108,7 +111,7 @@ pub async fn create(
     title: &str,
     params: &serde_json::Value,
 ) -> Result<JobView, sqlx::Error> {
-    let id = insert(db, kind, title, params).await?;
+    let id = insert(db, kind, title, params, None).await?;
     Ok(get(db, &id).await?.ok_or(sqlx::Error::RowNotFound)?.view)
 }
 
@@ -118,6 +121,7 @@ pub async fn insert<'c, E>(
     kind: &str,
     title: &str,
     params: &serde_json::Value,
+    user_id: Option<&str>,
 ) -> Result<String, sqlx::Error>
 where
     E: sqlx::Executor<'c, Database = sqlx::Sqlite>,
@@ -125,13 +129,14 @@ where
     let id = Uuid::now_v7().to_string();
     let now = now_ms();
     sqlx::query(
-        "INSERT INTO jobs (id, kind, title, state, params, created_at, updated_at)
-         VALUES (?, ?, ?, 'queued', ?, ?, ?)",
+        "INSERT INTO jobs (id, kind, title, state, params, user_id, created_at, updated_at)
+         VALUES (?, ?, ?, 'queued', ?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(kind)
     .bind(title)
     .bind(params.to_string())
+    .bind(user_id)
     .bind(now)
     .bind(now)
     .execute(db)

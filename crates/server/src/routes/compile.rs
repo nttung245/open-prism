@@ -21,6 +21,7 @@ use tower_http::services::ServeFile;
 use crate::compiler::{self, CompileResult, CompileStarted};
 use crate::error::ApiError;
 use crate::events::ProjectEvent;
+use crate::members::ProjectAccess;
 use crate::projects;
 use crate::routes::projects::content_disposition;
 use crate::state::AppState;
@@ -37,7 +38,7 @@ pub fn routes() -> Router<AppState> {
 
 async fn start(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
 ) -> Result<(StatusCode, Json<CompileStarted>), ApiError> {
     let project = projects::get(&state, &id).await?;
     let run_id = state.compiler.start(&state, &project)?;
@@ -48,7 +49,7 @@ async fn start(
 /// The newest finished compilation, or `null` if the project was never compiled.
 async fn latest(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
 ) -> Result<Json<Option<CompileResult>>, ApiError> {
     projects::get(&state, &id).await?;
     Ok(Json(compiler::latest(&state, &id).await?))
@@ -56,6 +57,7 @@ async fn latest(
 
 async fn show(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, run_id)): Path<(String, String)>,
 ) -> Result<Json<CompileResult>, ApiError> {
     projects::get(&state, &id).await?;
@@ -66,6 +68,7 @@ async fn show(
 /// answers range requests, which pdf.js uses to load large PDFs progressively.
 async fn output(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, run_id, file)): Path<(String, String, String)>,
     request: Request,
 ) -> Result<Response, ApiError> {
@@ -108,6 +111,7 @@ struct PagesQuery {
 /// never changes, so it may be cached for good.
 async fn pages(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, run_id)): Path<(String, String)>,
     Query(query): Query<PagesQuery>,
 ) -> Result<Response, ApiError> {
@@ -172,7 +176,7 @@ async fn pages(
 /// Server-sent events of one project: file changes and compilations (`ProjectEvent` JSON).
 async fn events(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     projects::get(&state, &id).await?;
     let stream = BroadcastStream::new(state.events.subscribe(&id)).map(|item| {

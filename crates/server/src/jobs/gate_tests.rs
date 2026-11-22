@@ -182,6 +182,7 @@ async fn three_background_requests_per_provider_and_other_providers_go_on() {
         dir: dir.path().to_path_buf(),
         state: state.clone(),
         cancel: CancellationToken::new(),
+        user_id: None,
     };
     let asked = Instant::now();
     let reply = ctx.ai_request(&other_model, request("hi")).await.unwrap();

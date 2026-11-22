@@ -1,4 +1,6 @@
 #[cfg(test)]
+mod access_tests;
+#[cfg(test)]
 pub(crate) mod accounts_tests;
 mod ai;
 #[cfg(test)]

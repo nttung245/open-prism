@@ -87,6 +87,8 @@ pub struct JobContext {
     pub state: AppState,
     /// Cancelled when the user cancels the job or the app stops.
     pub cancel: CancellationToken,
+    /// Who started the job (server mode): what it creates is theirs.
+    pub user_id: Option<String>,
 }
 impl JobContext {
     /// Says what the job is doing, for display.
@@ -206,6 +208,7 @@ pub async fn create(
 /// after `prepare` succeeded. When `prepare` fails there is no job and no directory.
 pub async fn create_prepared<F>(
     state: &AppState,
+    user_id: Option<&str>,
     kind: &str,
     title: &str,
     params: &serde_json::Value,
@@ -218,7 +221,7 @@ where
         return Err(ApiError::internal(format!("unknown job kind {kind:?}")));
     }
     let mut tx = state.db.begin().await?;
-    let id = store::insert(&mut *tx, kind, title, params).await?;
+    let id = store::insert(&mut *tx, kind, title, params, user_id).await?;
     let dir = state.paths.job_dir(&id);
     let target = dir.clone();
     let prepared = tokio::task::spawn_blocking(move || {
@@ -370,6 +373,7 @@ async fn run_job(state: &AppState, job: store::JobRow, shutdown: &CancellationTo
                 dir: state.paths.job_dir(&id),
                 state: state.clone(),
                 cancel: cancel.clone(),
+                user_id: job.user_id.clone(),
             };
             drive(kind, ctx, job.view.steps_total.is_none()).await
         }

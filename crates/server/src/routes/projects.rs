@@ -9,7 +9,9 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncWriteExt;
 use ts_rs::TS;
 
+use crate::auth::CurrentUser;
 use crate::error::ApiError;
+use crate::members::{Action, ProjectAccess};
 use crate::projects::{self, CreateProjectRequest, Project, UpdateProjectRequest};
 use crate::state::AppState;
 
@@ -43,46 +45,53 @@ pub fn routes() -> Router<AppState> {
         .route("/projects/{id}/export", get(export))
 }
 
-async fn list(State(state): State<AppState>) -> Result<Json<Vec<Project>>, ApiError> {
-    Ok(Json(projects::list(&state).await?))
+async fn list(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+) -> Result<Json<Vec<Project>>, ApiError> {
+    Ok(Json(projects::list(&state, principal.user_id()).await?))
 }
 
 async fn create(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Json(request): Json<CreateProjectRequest>,
 ) -> Result<(StatusCode, Json<Project>), ApiError> {
     Ok((
         StatusCode::CREATED,
-        Json(projects::create(&state, request).await?),
+        Json(projects::create(&state, principal.user_id(), request).await?),
     ))
 }
 
 async fn show(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
 ) -> Result<Json<Project>, ApiError> {
     Ok(Json(projects::get(&state, &id).await?))
 }
 
 async fn update(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    access: ProjectAccess,
     Json(request): Json<UpdateProjectRequest>,
 ) -> Result<Json<Project>, ApiError> {
-    Ok(Json(projects::update(&state, &id, request).await?))
+    access.require(Action::Configure)?;
+    Ok(Json(projects::update(&state, &access.id, request).await?))
 }
 
 async fn remove(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    access: ProjectAccess,
 ) -> Result<StatusCode, ApiError> {
-    projects::delete(&state, &id).await?;
+    access.require(Action::Own)?;
+    projects::delete(&state, &access.id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// `multipart/form-data` with a `file` (the ZIP) and an optional `name`.
 async fn import(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     mut multipart: Multipart,
 ) -> Result<(StatusCode, Json<ImportResponse>), ApiError> {
     let mut name: Option<String> = None;
@@ -137,13 +146,19 @@ async fn import(
         .unwrap_or_else(|| "Imported project".to_owned());
 
     let (report_tx, report_rx) = tokio::sync::oneshot::channel();
-    let project = projects::create_from_dir(&state, &name, "Project imported", move |dir| {
-        let file = temp.reopen().map_err(ApiError::internal)?;
-        let report = import_zip(std::io::BufReader::new(file), dir, ImportLimits::default())?;
-        let main_file = report.main_file.clone();
-        let _ = report_tx.send(report);
-        Ok(main_file)
-    })
+    let project = projects::create_from_dir(
+        &state,
+        principal.user_id(),
+        &name,
+        "Project imported",
+        move |dir| {
+            let file = temp.reopen().map_err(ApiError::internal)?;
+            let report = import_zip(std::io::BufReader::new(file), dir, ImportLimits::default())?;
+            let main_file = report.main_file.clone();
+            let _ = report_tx.send(report);
+            Ok(main_file)
+        },
+    )
     .await?;
     let skipped = report_rx
         .await
@@ -204,7 +219,7 @@ impl ExportFormat {
 
 async fn export(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ProjectAccess { id, .. }: ProjectAccess,
     Query(query): Query<ExportQuery>,
 ) -> Result<Response, ApiError> {
     let format = ExportFormat::parse(query.format.as_deref())?;

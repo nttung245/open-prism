@@ -13,6 +13,7 @@ use ts_rs::TS;
 
 use crate::compiler;
 use crate::error::ApiError;
+use crate::members::ProjectAccess;
 use crate::projects;
 use crate::state::AppState;
 
@@ -78,6 +79,7 @@ async fn load(state: &AppState, id: &str, run_id: &str) -> Result<Arc<SyncTex>, 
 
 async fn forward(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, run_id)): Path<(String, String)>,
     Query(query): Query<ForwardQuery>,
 ) -> Result<Json<ForwardSearchResponse>, ApiError> {
@@ -94,6 +96,7 @@ const NEAR_TEXT_BP: f64 = 8.0;
 
 async fn inverse(
     State(state): State<AppState>,
+    _access: ProjectAccess,
     Path((id, run_id)): Path<(String, String)>,
     Query(query): Query<InverseQuery>,
 ) -> Result<Json<InverseSearchResponse>, ApiError> {

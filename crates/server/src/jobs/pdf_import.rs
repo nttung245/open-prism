@@ -217,6 +217,7 @@ impl JobKind for PdfImport {
             let from = out.clone();
             let project = crate::projects::create_from_dir(
                 &job.state,
+                job.user_id.as_deref(),
                 &params.name,
                 "Imported from PDF",
                 move |dest| {
