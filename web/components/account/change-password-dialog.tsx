@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { type FormEvent, useState } from "react";
+import { type SubmitEvent, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { FIELD, Modal } from "@/components/ui/modal";
 import { apiFetch } from "@/lib/api/client";
@@ -36,7 +36,7 @@ export function ChangePasswordDialog({
     change.reset();
     onClose();
   };
-  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const onSubmit = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     const found = passwordProblem(next, confirmation);
     setProblem(found);

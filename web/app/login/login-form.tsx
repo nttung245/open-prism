@@ -1,9 +1,9 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  type FormEvent,
+  type SubmitEvent,
   useCallback,
   useEffect,
   useRef,
@@ -24,6 +24,7 @@ export function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const nextPath = safeNext(params.get("next"));
+  const queryClient = useQueryClient();
   const session = useQuery({
     queryKey: SESSION_KEY,
     queryFn: fetchSession,
@@ -43,6 +44,8 @@ export function LoginForm() {
           body: JSON.stringify(body),
         });
         if (response.ok) {
+          // The session read before signing in says "nobody": every page must read it again.
+          queryClient.removeQueries({ queryKey: SESSION_KEY });
           // `replace` also drops a `?token=` link from the browser history.
           router.replace(nextPath);
           router.refresh();
@@ -60,7 +63,7 @@ export function LoginForm() {
         setPending(false);
       }
     },
-    [router, nextPath],
+    [router, nextPath, queryClient],
   );
 
   if (session.isPending) {
@@ -135,7 +138,7 @@ function TokenForm({ onSignIn, pending }: FormProps) {
     }
   }, [params, onSignIn]);
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
+  function onSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     void onSignIn({ token: token.trim() });
   }
@@ -172,7 +175,7 @@ function PasswordForm({ onSignIn, pending }: FormProps) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
+  function onSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     void onSignIn({ username: username.trim(), password });
   }

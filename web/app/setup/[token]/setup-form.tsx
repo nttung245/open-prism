@@ -1,12 +1,12 @@
 "use client";
 
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { type FormEvent, useState } from "react";
+import { type SubmitEvent, useState } from "react";
 import { ApiError, apiFetch, apiJson } from "@/lib/api/client";
 import type { LinkInfo } from "@/lib/api/types/LinkInfo";
 import type { UseLinkRequest } from "@/lib/api/types/UseLinkRequest";
-import { passwordProblem, usernameProblem } from "@/lib/auth";
+import { passwordProblem, SESSION_KEY, usernameProblem } from "@/lib/auth";
 
 const INPUT =
   "rounded-md border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900";
@@ -18,6 +18,7 @@ const INPUT =
 export function SetupForm() {
   const { token } = useParams<{ token: string }>();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const path = `/api/auth/links/${encodeURIComponent(token)}` as const;
   const link = useQuery({
     queryKey: ["auth", "link", token],
@@ -37,6 +38,7 @@ export function SetupForm() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => {
+      queryClient.removeQueries({ queryKey: SESSION_KEY });
       router.replace("/");
       router.refresh();
     },
@@ -59,7 +61,7 @@ export function SetupForm() {
   }
 
   const firstAdmin = link.data.kind === "firstAdmin";
-  function onSubmit(event: FormEvent<HTMLFormElement>) {
+  function onSubmit(event: SubmitEvent<HTMLFormElement>) {
     event.preventDefault();
     const found =
       (firstAdmin ? usernameProblem(username) : null) ??
