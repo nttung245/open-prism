@@ -176,16 +176,21 @@ fn summary(row: &sqlx::sqlite::SqliteRow, awaiting: bool) -> Result<ThreadSummar
     })
 }
 
+/// The conversations of a project: those `user_id` started, or all of them for `None` (single-user
+/// mode and the access token).
 pub async fn list_threads(
     state: &AppState,
     project_id: &str,
+    user_id: Option<&str>,
 ) -> Result<Vec<ThreadSummary>, ApiError> {
     projects::get(state, project_id).await?;
     let rows = sqlx::query(
         "SELECT t.*, EXISTS (SELECT 1 FROM ai_patches p WHERE p.thread_id = t.id AND p.status = 'pending') AS awaiting
-         FROM ai_threads t WHERE t.project_id = ? ORDER BY t.updated_at DESC",
+         FROM ai_threads t WHERE t.project_id = ?1 AND (?2 IS NULL OR t.user_id = ?2)
+         ORDER BY t.updated_at DESC",
     )
     .bind(project_id)
+    .bind(user_id)
     .fetch_all(&state.db)
     .await?;
     rows.iter()
@@ -193,15 +198,21 @@ pub async fn list_threads(
         .collect()
 }
 
-pub async fn create_thread(state: &AppState, project_id: &str) -> Result<ThreadSummary, ApiError> {
+/// A new conversation, belonging to `user_id` (`None` in single-user mode).
+pub async fn create_thread(
+    state: &AppState,
+    project_id: &str,
+    user_id: Option<&str>,
+) -> Result<ThreadSummary, ApiError> {
     projects::get(state, project_id).await?;
     let id = Uuid::now_v7().to_string();
     let now = now_ms();
     sqlx::query(
-        "INSERT INTO ai_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, 'New chat', ?, ?)",
+        "INSERT INTO ai_threads (id, project_id, user_id, title, created_at, updated_at) VALUES (?, ?, ?, 'New chat', ?, ?)",
     )
     .bind(&id)
     .bind(project_id)
+    .bind(user_id)
     .bind(now)
     .bind(now)
     .execute(&state.db)
@@ -219,6 +230,18 @@ pub async fn thread(state: &AppState, id: &str) -> Result<ThreadSummary, ApiErro
     .await?
     .ok_or_else(|| ApiError::not_found("no such conversation"))?;
     summary(&row, row.try_get::<bool, _>("awaiting").unwrap_or(false))
+}
+
+/// The project of a conversation and who started it (`None`: single-user mode or the access token).
+pub async fn thread_owner(
+    state: &AppState,
+    id: &str,
+) -> Result<(String, Option<String>), ApiError> {
+    sqlx::query_as("SELECT project_id, user_id FROM ai_threads WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such conversation"))
 }
 
 pub async fn delete_thread(state: &AppState, id: &str) -> Result<(), ApiError> {

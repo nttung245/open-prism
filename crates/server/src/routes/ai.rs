@@ -21,10 +21,17 @@ use crate::images;
 use crate::members::{self, Action};
 use crate::state::AppState;
 
-/// The project behind a conversation must be one the principal may use.
+/// A conversation is its creator's alone (design D7): anyone else, the project's owner included,
+/// gets 404, and so does its creator once they have left the project. The access token reaches
+/// every conversation.
 async fn thread_access(state: &AppState, principal: &Principal, id: &str) -> Result<(), ApiError> {
-    let thread = chat::thread(state, id).await?;
-    members::authorize(state, principal, &thread.project_id, Action::Use).await?;
+    let (project_id, creator) = chat::thread_owner(state, id).await?;
+    if let Some(user) = principal.user()
+        && creator.as_deref() != Some(user.id.as_str())
+    {
+        return Err(ApiError::not_found("no such conversation"));
+    }
+    members::authorize(state, principal, &project_id, Action::Use).await?;
     Ok(())
 }
 
@@ -63,7 +70,9 @@ async fn list(
     Query(query): Query<ThreadsQuery>,
 ) -> Result<Json<Vec<ThreadSummary>>, ApiError> {
     members::authorize(&state, &principal, &query.project_id, Action::Use).await?;
-    Ok(Json(chat::list_threads(&state, &query.project_id).await?))
+    Ok(Json(
+        chat::list_threads(&state, &query.project_id, principal.user_id()).await?,
+    ))
 }
 
 async fn create(
@@ -74,7 +83,7 @@ async fn create(
     members::authorize(&state, &principal, &request.project_id, Action::Use).await?;
     Ok((
         StatusCode::CREATED,
-        Json(chat::create_thread(&state, &request.project_id).await?),
+        Json(chat::create_thread(&state, &request.project_id, principal.user_id()).await?),
     ))
 }
 

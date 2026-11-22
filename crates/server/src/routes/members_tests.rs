@@ -554,3 +554,127 @@ async fn single_user_mode_has_no_members() {
     .await;
     assert_eq!(members.status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn conversations_belong_to_whoever_started_them() {
+    let (app, state) = server().await;
+    account(&state, "lan", UserRole::User, "lan's own password").await;
+    let minh = account(&state, "minh", UserRole::User, "minh's own password").await;
+    let lan_cookie = sign_in(&app, "lan", "lan's own password").await;
+    let minh_cookie = sign_in(&app, "minh", "minh's own password").await;
+    let id = create_project(&app, &lan_cookie, "Paper").await;
+    members::add(&state.db, &id, &minh.id, ProjectRole::Member, 0)
+        .await
+        .unwrap();
+
+    // Each starts a conversation and sends an image in it.
+    let start = |cookie: &str| post("/api/ai/threads", Some(cookie), json!({ "projectId": id }));
+    let lan_thread = call(&app, start(&lan_cookie)).await;
+    assert_eq!(
+        lan_thread.status,
+        StatusCode::CREATED,
+        "{}",
+        lan_thread.json
+    );
+    let lan_thread = lan_thread.json["id"].as_str().unwrap().to_owned();
+    let minh_thread = call(&app, start(&minh_cookie)).await.json["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let image = uuid::Uuid::now_v7().to_string();
+    for thread in [&lan_thread, &minh_thread] {
+        let dir = state.paths.thread_attachments_dir(&id, thread);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{image}.png")), b"\x89PNG\r\n\x1a\n").unwrap();
+    }
+
+    // Each sees only their own.
+    let list = |cookie: &str| get(&format!("/api/ai/threads?projectId={id}"), Some(cookie));
+    for (cookie, mine) in [(&lan_cookie, &lan_thread), (&minh_cookie, &minh_thread)] {
+        let listed = call(&app, list(cookie)).await;
+        assert_eq!(listed.status, StatusCode::OK);
+        let ids: Vec<&str> = listed
+            .json
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|thread| thread["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, [mine.as_str()]);
+    }
+
+    // Lan's conversation does not exist for Minh, whatever he tries; Lan's owner role does not
+    // open Minh's either.
+    let thread = |thread: &str, path: &str| format!("/api/ai/threads/{thread}{path}");
+    for (cookie, other) in [(&minh_cookie, &lan_thread), (&lan_cookie, &minh_thread)] {
+        for request in [
+            get(&thread(other, ""), Some(cookie)),
+            get(&thread(other, &format!("/images/{image}")), Some(cookie)),
+            post(
+                &thread(other, "/messages"),
+                Some(cookie),
+                json!({ "text": "hi" }),
+            ),
+            post(
+                &thread(other, "/decisions"),
+                Some(cookie),
+                json!({ "decisions": [] }),
+            ),
+            send(Method::DELETE, &thread(other, ""), cookie, None),
+        ] {
+            let path = request.uri().to_string();
+            let reply = call(&app, request).await;
+            assert_eq!(
+                reply.status,
+                StatusCode::NOT_FOUND,
+                "{path}: {}",
+                reply.json
+            );
+        }
+    }
+    for (cookie, mine) in [(&lan_cookie, &lan_thread), (&minh_cookie, &minh_thread)] {
+        assert_eq!(
+            call(&app, get(&thread(mine, ""), Some(cookie)))
+                .await
+                .status,
+            StatusCode::OK
+        );
+        let picture = call(
+            &app,
+            get(&thread(mine, &format!("/images/{image}")), Some(cookie)),
+        )
+        .await;
+        assert_eq!(picture.status, StatusCode::OK);
+    }
+
+    // Removing Minh deletes his conversation and its images; Lan's stays.
+    let removed = call(
+        &app,
+        send(
+            Method::DELETE,
+            &format!("/api/projects/{id}/members/{}", minh.id),
+            &lan_cookie,
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(removed.status, StatusCode::NO_CONTENT);
+    let left: Vec<String> = sqlx::query_scalar("SELECT id FROM ai_threads WHERE project_id = ?")
+        .bind(&id)
+        .fetch_all(&state.db)
+        .await
+        .unwrap();
+    assert_eq!(left, std::slice::from_ref(&lan_thread));
+    assert!(
+        !state
+            .paths
+            .thread_attachments_dir(&id, &minh_thread)
+            .exists()
+    );
+    assert!(
+        state
+            .paths
+            .thread_attachments_dir(&id, &lan_thread)
+            .exists()
+    );
+}
