@@ -187,7 +187,7 @@ flowchart LR
 
 ## 项目状态
 
-早期版本（0.3.x）：
+早期版本（0.4.x）：
 - 每个版本都会发布 Linux 预构建安装包和多架构 Docker 镜像。
 - macOS 和 Windows 通过 Docker 运行，尚未在这两个系统上测试原生构建。
 - 请参阅[路线图](#路线图)和[发布版本](https://github.com/nttung245/open-prism/releases)。

@@ -201,7 +201,7 @@ flowchart LR
 
 ## Trạng thái dự án
 
-Các bản phát hành đầu (0.3.x):
+Các bản phát hành đầu (0.4.x):
 - Mỗi bản phát hành đều có gói dựng sẵn cho Linux và image Docker đa kiến trúc.
 - macOS và Windows chạy qua Docker; bản build trực tiếp trên hai hệ này chưa được kiểm thử.
 - Xem [lộ trình](#lộ-trình) và các [bản phát hành](https://github.com/nttung245/open-prism/releases).
