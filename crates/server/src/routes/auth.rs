@@ -223,6 +223,17 @@ pub fn session_cookie(value: String, secure: bool) -> Cookie<'static> {
         .build()
 }
 
+/// 429 with how long to wait, in the message and in `Retry-After` (seconds).
+fn too_many_attempts(wait_ms: i64) -> ApiError {
+    let seconds = (wait_ms + 999) / 1000;
+    ApiError::new(
+        StatusCode::TOO_MANY_REQUESTS,
+        "too_many_attempts",
+        format!("too many failed sign-ins: wait {seconds} seconds, then try again"),
+    )
+    .with_retry_after(seconds)
+}
+
 /// Wrong user name, wrong password and locked account all look the same.
 fn invalid_credentials() -> ApiError {
     ApiError::new(
@@ -258,6 +269,10 @@ async fn login(
             let (Some(username), Some(password)) = (body.username, body.password) else {
                 return Err(invalid_credentials());
             };
+            let started = now_ms();
+            if let Err(wait) = state.login_limit.check(&username, started) {
+                return Err(too_many_attempts(wait));
+            }
             let record = users::find_by_username(&state.db, username.trim()).await?;
             let stored = record
                 .as_ref()
@@ -272,8 +287,10 @@ async fn login(
             })
             .await?;
             let Some(record) = record.filter(|_| matches) else {
+                state.login_limit.failure(&username, started);
                 return Err(invalid_credentials());
             };
+            state.login_limit.success(&username);
             let now = now_ms();
             let user_agent = headers
                 .get(header::USER_AGENT)

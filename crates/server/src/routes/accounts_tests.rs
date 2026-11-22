@@ -529,3 +529,103 @@ async fn the_first_admin_takes_over_single_user_data() {
     assert_eq!(thread_owner.as_deref(), Some(admin.as_str()));
     assert_eq!(job_owner.as_deref(), Some(admin.as_str()));
 }
+
+#[tokio::test]
+async fn guessing_a_password_gets_locked_out() {
+    let (app, state) = server().await;
+    account(&state, "lan", UserRole::User, "correct horse battery").await;
+    let attempt = |password: &'static str| {
+        post(
+            "/api/auth/login",
+            None,
+            serde_json::json!({ "username": "lan", "password": password }),
+        )
+    };
+    for _ in 0..5 {
+        assert_eq!(
+            call(&app, attempt("a wrong guess here")).await.status,
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let sixth = call(&app, attempt("a wrong guess here")).await;
+    assert_eq!(sixth.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(sixth.json["error"]["code"], "too_many_attempts");
+    let wait: i64 = sixth.headers[header::RETRY_AFTER]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=60).contains(&wait), "{wait}");
+    // Even the right password waits.
+    let right = call(&app, attempt("correct horse battery")).await;
+    assert_eq!(right.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(right.headers.get(header::SET_COOKIE).is_none());
+}
+
+#[tokio::test]
+async fn writes_must_come_from_the_site() {
+    let (app, state) = server().await;
+    account(&state, "lan", UserRole::User, "correct horse battery").await;
+    let cookie = sign_in(&app, "lan", "correct horse battery").await;
+    let create = |origin: Option<&str>| {
+        let mut request = Request::post("/api/projects")
+            .header(header::CONTENT_TYPE, "application/json")
+            .header(header::COOKIE, &cookie);
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        request
+            .body(Body::from(
+                serde_json::json!({ "name": "Paper", "template": "article" }).to_string(),
+            ))
+            .unwrap()
+    };
+    let foreign = call(&app, create(Some("https://evil.example"))).await;
+    assert_eq!(foreign.status, StatusCode::FORBIDDEN);
+    assert_eq!(foreign.json["error"]["code"], "cross_site");
+    assert_eq!(call(&app, create(None)).await.status, StatusCode::FORBIDDEN);
+    let projects = call(&app, get("/api/projects", Some(&cookie))).await;
+    assert_eq!(
+        projects.json.as_array().unwrap().len(),
+        0,
+        "nothing was created"
+    );
+
+    assert_eq!(
+        call(&app, create(Some(SITE))).await.status,
+        StatusCode::CREATED
+    );
+    // Reading needs no Origin.
+    let read = Request::get("/api/projects")
+        .header(header::COOKIE, &cookie)
+        .header(header::ORIGIN, "https://evil.example")
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(call(&app, read).await.status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn the_token_signs_no_browser_in_but_scripts_still_use_it() {
+    let (app, _state) = server().await;
+    let login = call(
+        &app,
+        post(
+            "/api/auth/login",
+            None,
+            serde_json::json!({ "token": TOKEN }),
+        ),
+    )
+    .await;
+    assert_eq!(login.status, StatusCode::UNAUTHORIZED);
+    assert!(login.headers.get(header::SET_COOKIE).is_none());
+
+    // A script on the machine: bearer token, no cookie, no Origin.
+    let script = Request::post("/api/projects")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+        .body(Body::from(
+            serde_json::json!({ "name": "From a script", "template": "article" }).to_string(),
+        ))
+        .unwrap();
+    assert_eq!(call(&app, script).await.status, StatusCode::CREATED);
+}

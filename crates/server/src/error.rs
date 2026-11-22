@@ -25,6 +25,8 @@ pub struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
+    /// Seconds for a `Retry-After` header.
+    retry_after: Option<i64>,
 }
 
 impl ApiError {
@@ -33,7 +35,13 @@ impl ApiError {
             status,
             code,
             message: message.into(),
+            retry_after: None,
         }
+    }
+
+    pub fn with_retry_after(mut self, seconds: i64) -> Self {
+        self.retry_after = Some(seconds.max(1));
+        self
     }
 
     pub fn not_found(message: impl Into<String>) -> Self {
@@ -59,7 +67,15 @@ impl IntoResponse for ApiError {
                 message: self.message,
             },
         };
-        (self.status, Json(body)).into_response()
+        let mut response = (self.status, Json(body)).into_response();
+        if let Some(seconds) = self.retry_after
+            && let Ok(value) = axum::http::HeaderValue::from_str(&seconds.to_string())
+        {
+            response
+                .headers_mut()
+                .insert(axum::http::header::RETRY_AFTER, value);
+        }
+        response
     }
 }
 

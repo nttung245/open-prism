@@ -11,6 +11,7 @@ use crate::chat::RunningTurns;
 use crate::compiler::Compiler;
 use crate::events::EventHub;
 use crate::jobs::Jobs;
+use crate::login_limit::LoginLimiter;
 use crate::mode::Mode;
 use crate::synctex_cache::SyncTexCache;
 
@@ -23,6 +24,8 @@ pub struct Inner {
     pub token: AccessToken,
     /// Single-user (the default) or server mode.
     pub mode: Mode,
+    /// Failed sign-ins in server mode.
+    pub login_limit: LoginLimiter,
     /// TeX toolchains found at startup.
     pub engines: Vec<EngineInfo>,
     pub paths: DataPaths,
@@ -156,6 +159,7 @@ impl AppState {
         let state = Self(Arc::new(Inner {
             token,
             mode,
+            login_limit: LoginLimiter::default(),
             compiler: Compiler::new(engines.clone()),
             engines,
             paths,

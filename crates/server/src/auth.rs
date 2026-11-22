@@ -200,6 +200,9 @@ pub async fn require_session(
     mut request: Request,
     next: Next,
 ) -> Response {
+    if let Err(err) = check_origin(&state, &jar, &request) {
+        return err.into_response();
+    }
     let principal = identify(&state, &jar, request.headers()).await;
     let public = is_public(request.uri().path());
     match principal {
@@ -210,6 +213,42 @@ pub async fn require_session(
         None if public => next.run(request).await,
         None => ApiError::unauthorized("sign in to Open Prism first").into_response(),
     }
+}
+
+/// Server mode: a write request must come from the site itself (design D5). Browsers send
+/// `Origin` with every write; together with `SameSite=Strict` cookies this stops cross-site
+/// requests. A request without a session cookie that carries the access token as a bearer
+/// token is a script on the machine, not a browser, and passes.
+fn check_origin(state: &AppState, jar: &CookieJar, request: &Request) -> Result<(), ApiError> {
+    let Some(server) = state.mode.server() else {
+        return Ok(());
+    };
+    let method = request.method();
+    if method.is_safe() {
+        return Ok(());
+    }
+    let has_cookie = jar.get(SESSION_COOKIE).is_some();
+    if !has_cookie && request.headers().contains_key(AUTHORIZATION) {
+        // A script with the token: it gets no further unless the token is right.
+        return Ok(());
+    }
+    let origin = request
+        .headers()
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    let refused = match origin {
+        Some(origin) => origin != server.public_url.origin(),
+        // Without a cookie there is nothing a forged request could use (signing in, say).
+        None => has_cookie,
+    };
+    if refused {
+        return Err(ApiError::new(
+            axum::http::StatusCode::FORBIDDEN,
+            "cross_site",
+            "this request does not come from Open Prism's own pages",
+        ));
+    }
+    Ok(())
 }
 
 /// The principal of a request that passed [`require_session`].

@@ -11,6 +11,7 @@ mod image_latex;
 mod images;
 mod jobs;
 mod links;
+mod login_limit;
 mod mode;
 mod passwords;
 mod projects;
