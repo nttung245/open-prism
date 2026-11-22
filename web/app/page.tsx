@@ -1,6 +1,7 @@
 import { Settings } from "lucide-react";
 import Link from "next/link";
 import { Suspense } from "react";
+import { UserMenu } from "@/components/account/user-menu";
 import { ProjectList } from "@/components/projects/project-list";
 import { apiGet } from "@/lib/api/server";
 import type { JobView } from "@/lib/api/types/JobView";
@@ -17,12 +18,15 @@ export default function Home() {
             LaTeX editor with AI assistance that works with any LLM provider.
           </p>
         </div>
-        <Link
-          href="/settings"
-          className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm hover:bg-panel"
-        >
-          <Settings className="size-4" /> Settings
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/settings"
+            className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm hover:bg-panel"
+          >
+            <Settings className="size-4" /> Settings
+          </Link>
+          <UserMenu />
+        </div>
       </header>
       <Suspense
         fallback={<p className="text-sm text-muted">Loading projects…</p>}

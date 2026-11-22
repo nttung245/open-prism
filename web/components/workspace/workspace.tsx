@@ -24,6 +24,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
+import { UserMenu } from "@/components/account/user-menu";
 import {
   type AssistantHandle,
   AssistantPanel,
@@ -895,6 +896,7 @@ export default function Workspace({
           <Settings className="size-4" />
         </Link>
         <DownloadMenu projectId={id} />
+        <UserMenu compact />
       </header>
 
       {notice && (
