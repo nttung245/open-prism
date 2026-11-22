@@ -4,6 +4,7 @@
 #   ./open-prism                    start it; the browser opens (OPENPRISM_NO_BROWSER=1 to skip)
 #   ./open-prism --port 8799 ...    the same, with options of `open-prism-api serve`
 #   ./open-prism print-token        other commands go to open-prism-api as they are
+#   ./open-prism user list          accounts of server mode (also reset-password, create-admin)
 #   ./open-prism install-desktop    add Open Prism to the application menu
 #   ./open-prism uninstall-desktop  remove it from the menu
 set -eu
@@ -61,7 +62,7 @@ esac
 # Commands other than serving go to open-prism-api unchanged.
 for arg do
   case "$arg" in
-    print-token | help | -h | --help | -V | --version) exec "$api" "$@" ;;
+    print-token | user | help | -h | --help | -V | --version) exec "$api" "$@" ;;
   esac
 done
 

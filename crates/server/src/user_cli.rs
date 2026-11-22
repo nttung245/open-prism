@@ -34,9 +34,9 @@ pub async fn run(data_dir: &Path, mode: &Mode, command: &UserCommand) -> anyhow:
             .fetch_all(&db)
             .await?;
             if rows.is_empty() {
-                return Ok("No accounts yet. Create the first admin with \
-                           `open-prism-api user create-admin <name>`, or open the link the \
-                           server prints when it starts."
+                return Ok("No accounts yet. Create the first admin with the command \
+                           `user create-admin <name>`, or open the link the server prints when \
+                           it starts."
                     .into());
             }
             let mut out = format!("{:<24} {:<6} {:<12} {}\n", "USER", "ROLE", "STATUS", "NAME");

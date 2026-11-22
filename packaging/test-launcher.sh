@@ -35,6 +35,8 @@ check "options go to serve" "${serve}--open|--port|8799|" "$(run --port 8799)"
 check "serve typed by hand" "${serve}--open|--web-port|3799|" "$(run serve --web-port 3799)"
 check "print-token unchanged" "--data-dir|X|print-token|" "$(run --data-dir X print-token)"
 check "--version unchanged" "--version|" "$(run --version)"
+check "user commands unchanged" "--mode|server|user|reset-password|lan|" \
+  "$(run --mode server user reset-password lan)"
 check "help unchanged" "help|" "$(run help)"
 
 # The application menu, in a throwaway data home.

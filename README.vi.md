@@ -212,6 +212,8 @@ Tài liệu chi tiết hiện có bằng tiếng Anh:
 
 - [Installation in depth](README.md#installation-in-depth): cài đặt chuyên sâu, kiểm tra file
   tải về, Docker, sao lưu
+- [Server mode](README.md#server-mode): một Open Prism cho cả nhóm trên máy chủ chung, có tài
+  khoản, thành viên project và provider AI dùng chung
 - [Feature reference](README.md#feature-reference): mô tả đầy đủ từng tính năng
 - [AI providers](README.md#ai-providers): nơi lấy API key, vai trò và mức suy nghĩ, mô hình
   chạy trên máy
@@ -232,6 +234,10 @@ Tài liệu chi tiết hiện có bằng tiếng Anh:
       Docker
 - [x] **Nhập PDF**: job chạy nền, và nhập PDF (kể cả bản scan) thành project LaTeX, Agent đọc
       từng trang
+- [x] **Chế độ server**: một Open Prism cho cả nhóm, có tài khoản, thành viên project, và provider
+      AI dùng chung lẫn riêng
+- [ ] **Bản nháp**: mỗi người một bản nháp của project, lấy từng phần từ bản của người khác, và yêu
+      cầu gộp do chủ project duyệt
 
 ## Đóng góp
 

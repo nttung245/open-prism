@@ -198,6 +198,8 @@ flowchart LR
 
 - [Installation in depth](README.md#installation-in-depth)：深入安装说明、校验下载文件、
   Docker、备份
+- [Server mode](README.md#server-mode)：在共享服务器上为整个团队运行一个 Open Prism，
+  包括账号、项目成员和共享的 AI 服务商
 - [Feature reference](README.md#feature-reference)：每项功能的完整说明
 - [AI providers](README.md#ai-providers)：获取 API 密钥、角色与推理强度、本地模型
 - [Troubleshooting](README.md#troubleshooting)：故障排查、数据存放位置
@@ -215,6 +217,9 @@ flowchart LR
       内容转 LaTeX
 - [x] **M4 发布**：一条命令启动、用户文档、Linux 预构建安装包、Docker 镜像
 - [x] **PDF 导入**：后台任务，以及由 Agent 逐页阅读、把 PDF（包括扫描件）导入为 LaTeX 项目
+- [x] **服务器模式**：为整个团队运行一个 Open Prism，包括账号、项目成员，以及共享和个人的
+      AI 服务商
+- [ ] **草稿**：每人一份项目草稿，可从他人的草稿中取用部分内容，并提交由项目所有者审核的合并请求
 
 ## 参与贡献
 

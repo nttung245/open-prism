@@ -186,9 +186,10 @@ flowchart LR
 
 ## Privacy and security
 
-- **Local only.** The API listens on `127.0.0.1`, and the web app does too, except inside the
-  Docker image, whose port is published on the host's `127.0.0.1`. Sign-in uses a random
-  access token created on first start.
+- **Local by default.** The API listens on `127.0.0.1`, and the web app does too, except inside
+  the Docker image, whose port is published on the host's `127.0.0.1`. Sign-in uses a random
+  access token created on first start. [Server mode](#server-mode), for a group, adds accounts
+  and runs behind an HTTPS reverse proxy.
 - **What a provider receives** is only what each feature needs:
   - your messages and their images;
   - the files and compile log the assistant reads;
@@ -211,6 +212,7 @@ Early releases (0.3.x):
 # Documentation
 
 - [Installation in depth](#installation-in-depth)
+- [Server mode](#server-mode)
 - [Feature reference](#feature-reference)
 - [AI providers](#ai-providers)
 - [Troubleshooting](#troubleshooting)
@@ -308,6 +310,110 @@ The first `just build` takes several minutes. Then open the link `just start` pr
 - **Without just:** after a build, `just start` is the same as
   `./target/release/open-prism-api serve --web web/.next/standalone`. See
   [Configuration](#configuration) for its options.
+
+## Server mode
+
+By default Open Prism is for one person on one computer. **Server mode** runs one Open Prism for
+a group, on a shared machine on your network or a VPS. Everyone signs in with their own account,
+and each project has an owner and the people they add. It is in Open Prism 0.4.0 and later.
+
+**What changes:**
+- **Accounts.** Nobody signs up. An admin adds people, and each one sets a password from a link
+  that works once, for 7 days. Repeated wrong passwords make sign-in wait. Sessions end after
+  30 days without use.
+- **Projects.** Whoever creates or imports a project owns it, and adds people by user name:
+  - a `member` opens, edits and compiles, and uses the assistant;
+  - a `manager` also adds and removes people, and renames the project or changes its main file
+    or engine;
+  - only the owner deletes the project or hands it over.
+
+  Nobody else sees the project, admins included.
+- **The assistant.** Conversations and background jobs belong to the person who started them.
+  An admin shares providers and sets the default models. Anyone can add a personal provider with
+  their own key and pick their own models in Settings. Keys never go back to the browser, and
+  nobody can use someone else's personal provider.
+- **History** shows who made each snapshot.
+
+### Run it behind Caddy
+
+Server mode needs HTTPS: passwords and session cookies must not travel in clear text.
+[`compose.server.yaml`](compose.server.yaml) runs Open Prism behind
+[Caddy](https://caddyserver.com), which gets the certificate from Let's Encrypt.
+
+**You need:**
+- a machine with Docker;
+- a domain, such as `prism.example.org`, that points at it;
+- ports 80 and 443 reachable by the people who use it.
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/nttung245/open-prism/main/compose.server.yaml
+curl -fsSLO https://raw.githubusercontent.com/nttung245/open-prism/main/Caddyfile
+export OPENPRISM_DOMAIN=prism.example.org
+docker compose -f compose.server.yaml up -d
+docker compose -f compose.server.yaml logs open-prism   # the link that creates the first admin
+```
+
+- **Ports.** Open Prism publishes no port of its own; only Caddy reaches it.
+- **Trying it on one machine.** With `OPENPRISM_DOMAIN=localhost`, Caddy signs the certificate
+  with its own local authority. The browser warns about it once.
+- **Without Docker.** Put your own reverse proxy in front of
+  `./open-prism --mode server --public-url https://prism.example.org` from the
+  [Linux package](#linux-package), on the same machine: the web app listens on
+  `127.0.0.1:3737`.
+
+### The first admin
+
+When server mode starts with no account, the log shows a link such as
+`https://prism.example.org/setup/…`, which works once, for 24 hours. Open it and choose a user
+name, the name others see, and a password.
+
+Projects already in the data folder become the first admin's, with their history and
+conversations. A single-user Open Prism switches to server mode without losing anything.
+
+### Adding people and sharing projects
+
+- **People:** open **Manage the server** from the menu with your name, and add a person. Send
+  them the link shown next to the form. **New link** makes another one, for a lost link or a
+  forgotten password.
+- **Projects:** the **Members** button, in the project list and in the project's header, adds
+  people by user name, changes their role, removes them, or hands the project over.
+- **Locking** an account signs it out everywhere. If it owned projects, **Projects** next to it
+  hands them to someone else.
+
+### Sharing AI providers
+
+- **Shared providers:** in **Manage the server**, add them under **Shared AI providers**, then
+  choose the **Default models**.
+- **Personal choices:** everyone uses the defaults unless they choose their own under
+  **Your models** in Settings. That can be a personal provider with their own key.
+
+### Getting back in from the shell
+
+The `user` commands print one-time links; a password never goes on the command line:
+
+```sh
+docker compose -f compose.server.yaml exec open-prism open-prism user list
+docker compose -f compose.server.yaml exec open-prism open-prism user reset-password lan
+docker compose -f compose.server.yaml exec open-prism open-prism user create-admin rescue
+```
+
+- **`create-admin`** works even when every admin is locked out.
+- **With the Linux package,** add `--mode server --public-url https://prism.example.org` before
+  `user`.
+- **Scripts** on the server itself can still use the access token
+  (`open-prism print-token`) as `Authorization: Bearer <token>`. It can do everything.
+
+### Backups
+
+Stop Open Prism, copy its data out, and start it again:
+
+```sh
+docker compose -f compose.server.yaml stop open-prism
+docker compose -f compose.server.yaml cp open-prism:/data ./open-prism-backup
+docker compose -f compose.server.yaml start open-prism
+```
+
+The backup holds password hashes, sessions and provider keys: keep it private.
 
 ## Feature reference
 
@@ -624,7 +730,7 @@ It holds:
 | `projects/` | one plain folder per project | yes |
 | `history/` | version history | yes |
 | `attachments/` | images sent to the assistant | yes |
-| `open-prism.db` | settings, provider keys, conversations, background jobs | yes |
+| `open-prism.db` | settings, provider keys, conversations, background jobs; in server mode also accounts and sessions | yes |
 | `access-token` | the sign-in token | yes |
 | `jobs/` | working files of background jobs | only while a job is unfinished |
 | `build/`, `runs/`, `cache/`, `tmp/` | compile output and caches | no |
@@ -639,6 +745,9 @@ To back up, stop Open Prism and copy the folder.
 | `OPENPRISM_PORT` | API | `8787` |
 | `OPENPRISM_ACCESS_TOKEN` | API | read from / created in `<data dir>/access-token` |
 | `OPENPRISM_TEX_IMAGE` | API, `just tex-pull` | `texlive/texlive:latest` (`none` disables Docker) |
+| `OPENPRISM_MODE` | API | `single` (`server` for [server mode](#server-mode)) |
+| `OPENPRISM_PUBLIC_URL` | API, server mode | none: required, the `https://` address people open |
+| `OPENPRISM_INSECURE_HTTP` | API, server mode | off (`true` accepts an `http://` public URL, for a test on a trusted network) |
 | `OPENPRISM_API_URL` | web (set by `serve --web`) | `http://127.0.0.1:8787` |
 | `OPENPRISM_WEB_PORT` | `serve --web` | `3737` |
 | `OPENPRISM_WEB_HOST` | `serve --web` | `127.0.0.1` (`0.0.0.0` in the Docker image) |
@@ -647,7 +756,8 @@ To back up, stop Open Prism and copy the folder.
 | `OPENPRISM_NO_BROWSER` | `./open-prism` in a release | unset (`1` leaves out `--open`) |
 | `WEB_PORT` | `just dev` / `just start` | `3737` |
 
-Most have a flag too: `--data-dir`, `--port` and `--tex-image`, and after `serve`,
+Most have a flag too: `--data-dir`, `--port`, `--tex-image`, `--mode`, `--public-url` and
+`--insecure-http`, and after `serve`,
 `--web-port`, `--web-host`, `--node` and `--open`. `open-prism-api --help` lists them.
 
 **`--web-host`** takes `127.0.0.1` (this computer only) or `0.0.0.0` (every address). Use
@@ -772,6 +882,10 @@ To release:
 - [x] **M4 Release**: one-command run, user docs, prebuilt Linux packages, Docker image
 - [x] **PDF import**: background jobs, and importing a PDF (scanned too) as a LaTeX project,
       the Agent reading each page
+- [x] **Server mode**: one Open Prism for a group, with accounts, project members, and shared
+      and personal AI providers
+- [ ] **Drafts**: a draft of each project per person, taking parts of someone else's draft, and
+      merge requests that the owner reviews
 
 ## Contributing
 
