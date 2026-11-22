@@ -50,6 +50,27 @@ pub enum Command {
     Serve(ServeArgs),
     /// Print the access token used to sign in (creates it if needed).
     PrintToken,
+    /// Manage the accounts of server mode (needs --mode server and --public-url, as for serve).
+    User {
+        #[command(subcommand)]
+        action: UserCommand,
+    },
+}
+
+/// `open-prism-api user …`. Passwords are never arguments: the commands print one-time links.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum UserCommand {
+    /// List the accounts.
+    List,
+    /// Print a one-time link that sets a new password for an account.
+    ResetPassword { username: String },
+    /// Create an admin and print a one-time link that sets its password.
+    CreateAdmin {
+        username: String,
+        /// The name others see; the user name by default.
+        #[arg(long)]
+        display_name: Option<String>,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -282,6 +303,27 @@ mod tests {
             .is_ok()
         );
         assert!(Args::try_parse_from(["open-prism-api", "--mode", "cluster"]).is_err());
+    }
+
+    #[test]
+    fn user_commands_take_no_password() {
+        assert!(matches!(
+            parse(&["user", "reset-password", "lan"]).command,
+            Some(Command::User {
+                action: UserCommand::ResetPassword { .. }
+            })
+        ));
+        assert!(matches!(
+            parse(&["user", "create-admin", "lan", "--display-name", "Lan Tran"]).command,
+            Some(Command::User {
+                action: UserCommand::CreateAdmin { .. }
+            })
+        ));
+        for extra in [&["--password", "secret12345"][..], &["secret12345"][..]] {
+            let mut args = vec!["open-prism-api", "user", "reset-password", "lan"];
+            args.extend(extra);
+            assert!(Args::try_parse_from(args).is_err(), "{extra:?}");
+        }
     }
 
     #[test]

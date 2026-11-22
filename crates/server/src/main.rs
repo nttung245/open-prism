@@ -20,6 +20,7 @@ mod sessions;
 mod settings;
 mod state;
 mod synctex_cache;
+mod user_cli;
 mod users;
 mod web;
 
@@ -53,7 +54,8 @@ async fn main() -> anyhow::Result<()> {
     let args = cli::Args::parse();
     // Check the mode flags before anything else: a server-mode mistake must stop here.
     let mode = args.mode().map_err(anyhow::Error::msg)?;
-    if let Some(server) = mode.server() {
+    let serving = matches!(args.command, None | Some(Command::Serve(_)));
+    if let Some(server) = mode.server().filter(|_| serving) {
         tracing::info!(public_url = %server.public_url, "server mode: accounts and passwords");
         if server.insecure_http {
             tracing::warn!(
@@ -83,6 +85,10 @@ async fn main() -> anyhow::Result<()> {
     let token = AccessToken::resolve(&data_dir).await?;
     if let Some(Command::PrintToken) = args.command {
         println!("{}", token.expose());
+        return Ok(());
+    }
+    if let Some(Command::User { action }) = &args.command {
+        println!("{}", user_cli::run(&data_dir, &mode, action).await?);
         return Ok(());
     }
     let sign_in_token = token.expose().to_owned();
