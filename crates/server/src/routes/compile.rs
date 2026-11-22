@@ -173,20 +173,31 @@ async fn pages(
         .into_response())
 }
 
-/// Server-sent events of one project: file changes and compilations (`ProjectEvent` JSON).
+/// Server-sent events of one project: file changes and compilations (`ProjectEvent` JSON). The
+/// stream of someone removed from the project ends right after the `membersChanged` event.
 async fn events(
     State(state): State<AppState>,
-    ProjectAccess { id, .. }: ProjectAccess,
+    access: ProjectAccess,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    projects::get(&state, &id).await?;
-    let stream = BroadcastStream::new(state.events.subscribe(&id)).map(|item| {
-        let event = match item {
-            Ok(event) => event,
-            Err(BroadcastStreamRecvError::Lagged(_)) => ProjectEvent::Resync,
-        };
-        Ok(Event::default()
-            .json_data(&event)
-            .unwrap_or_else(|_| Event::default().comment("unserialisable event")))
+    projects::get(&state, &access.id).await?;
+    let me = access.principal.user_id().map(str::to_owned);
+    let events = BroadcastStream::new(state.events.subscribe(&access.id));
+    let stream = futures_util::stream::unfold((events, false), move |(mut events, ended)| {
+        let me = me.clone();
+        async move {
+            if ended {
+                return None;
+            }
+            let event = match events.next().await? {
+                Ok(event) => event,
+                Err(BroadcastStreamRecvError::Lagged(_)) => ProjectEvent::Resync,
+            };
+            let last = me.as_deref().is_some_and(|me| event.ends_stream_of(me));
+            let sse = Event::default()
+                .json_data(&event)
+                .unwrap_or_else(|_| Event::default().comment("unserialisable event"));
+            Some((Ok(sse), (events, last)))
+        }
     });
     Ok(Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }

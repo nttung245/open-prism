@@ -138,6 +138,36 @@ fn routes(
             None,
         ),
         (
+            "/projects/{id}/members",
+            Method::GET,
+            project("/members"),
+            None,
+        ),
+        (
+            "/projects/{id}/members",
+            Method::POST,
+            project("/members"),
+            Some(serde_json::json!({ "username": "lan", "role": "member" })),
+        ),
+        (
+            "/projects/{id}/members/{user_id}",
+            Method::PATCH,
+            project("/members/someone"),
+            Some(serde_json::json!({ "role": "manager" })),
+        ),
+        (
+            "/projects/{id}/members/{user_id}",
+            Method::DELETE,
+            project("/members/someone"),
+            None,
+        ),
+        (
+            "/projects/{id}/owner",
+            Method::POST,
+            project("/owner"),
+            Some(serde_json::json!({ "userId": "someone" })),
+        ),
+        (
             "/ai/threads",
             Method::GET,
             format!("/api/ai/threads?projectId={id}"),
@@ -460,6 +490,7 @@ fn every_project_route_is_in_the_table() {
         include_str!("history.rs"),
         include_str!("synctex.rs"),
         include_str!("ai.rs"),
+        include_str!("members.rs"),
     ];
     let mut missing = Vec::new();
     for source in sources {

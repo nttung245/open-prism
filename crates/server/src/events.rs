@@ -31,6 +31,13 @@ pub enum ProjectEvent {
     },
     /// A snapshot was added or a label changed: reload the history.
     HistoryChanged,
+    /// People were added to or removed from the project, or their roles changed: reload them.
+    MembersChanged {
+        /// Accounts that just lost access; their streams end after this event. Never sent.
+        #[serde(skip)]
+        #[ts(skip)]
+        removed: Vec<String>,
+    },
     /// Events were dropped (slow client): reload everything.
     Resync,
 }
@@ -48,8 +55,36 @@ pub enum AppEvent {
     JobChanged { job: JobView },
     /// A finished background job was deleted.
     JobRemoved { id: String },
+    /// The projects of some accounts changed (added to or removed from a project): reload the
+    /// project list.
+    ProjectsChanged {
+        /// The accounts concerned; only their streams get the event. Never sent.
+        #[serde(skip)]
+        #[ts(skip)]
+        users: Vec<String>,
+    },
     /// Events were dropped (slow client): reload the jobs.
     Resync,
+}
+
+impl ProjectEvent {
+    /// The last event of the project stream of `user_id`: they were just removed from it.
+    pub fn ends_stream_of(&self, user_id: &str) -> bool {
+        matches!(self, Self::MembersChanged { removed } if removed.iter().any(|id| id == user_id))
+    }
+}
+
+impl AppEvent {
+    /// Whether the stream of `user_id` gets this event (`None`: single-user mode and the access
+    /// token, which get everything).
+    pub fn is_for(&self, user_id: Option<&str>) -> bool {
+        match (self, user_id) {
+            (Self::ProjectsChanged { users }, Some(user_id)) => {
+                users.iter().any(|id| id == user_id)
+            }
+            _ => true,
+        }
+    }
 }
 
 const CHANNEL_CAPACITY: usize = 256;

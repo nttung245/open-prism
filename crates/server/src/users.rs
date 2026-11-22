@@ -132,13 +132,6 @@ pub async fn get(db: &SqlitePool, id: &str) -> Result<Option<UserRecord>, sqlx::
         .transpose()
 }
 
-/// How many accounts exist.
-pub async fn count(db: &SqlitePool) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar("SELECT COUNT(*) FROM users")
-        .fetch_one(db)
-        .await
-}
-
 pub async fn set_password_hash(
     db: impl sqlx::SqliteExecutor<'_>,
     user_id: &str,

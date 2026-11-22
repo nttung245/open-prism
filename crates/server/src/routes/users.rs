@@ -12,7 +12,9 @@ use crate::auth::{CurrentUser, Principal};
 use crate::db::now_ms;
 use crate::error::ApiError;
 use crate::links;
+use crate::members::{self, ProjectRole};
 use crate::routes::auth::check_display_name;
+use crate::routes::members::{MemberView, announce, members_of, set_owner};
 use crate::state::AppState;
 use crate::users::{self, UserRole};
 
@@ -21,6 +23,8 @@ pub fn routes() -> Router<AppState> {
         .route("/users", get(list).post(create))
         .route("/users/{id}", patch(update))
         .route("/users/{id}/link", post(new_link))
+        .route("/users/{id}/projects", get(projects_of))
+        .route("/users/{id}/projects/{project_id}/owner", post(hand_over))
 }
 
 /// An account, as admins see it.
@@ -77,6 +81,25 @@ pub struct UpdateUserRequest {
 #[ts(export)]
 pub struct LinkResponse {
     pub link: String,
+}
+
+/// A project someone is in, as admins see it (to hand over the projects of a locked account).
+#[derive(Debug, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct UserProjectView {
+    pub id: String,
+    pub name: String,
+    pub role: ProjectRole,
+    pub updated_at: i64,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export)]
+pub struct HandOverRequest {
+    /// The new owner: an account that is not locked.
+    pub user_id: String,
 }
 
 /// Admins (and scripts with the token) only, in server mode.
@@ -257,4 +280,74 @@ async fn new_link(
     Ok(Json(LinkResponse {
         link: link_to(&state, &token),
     }))
+}
+
+/// The projects an account is in. Admins read it to hand over the projects of a locked account.
+async fn projects_of(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Path(id): Path<String>,
+) -> Result<Json<Vec<UserProjectView>>, ApiError> {
+    require_admin(&state, &principal)?;
+    users::get(&state.db, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    let rows = sqlx::query(
+        "SELECT p.id, p.name, p.updated_at, m.role
+         FROM project_members m JOIN projects p ON p.id = m.project_id
+         WHERE m.user_id = ?
+         ORDER BY p.updated_at DESC",
+    )
+    .bind(&id)
+    .fetch_all(&state.db)
+    .await?;
+    let views = rows
+        .iter()
+        .map(|row| {
+            let role: String = row.try_get("role")?;
+            Ok(UserProjectView {
+                id: row.try_get("id")?,
+                name: row.try_get("name")?,
+                role: ProjectRole::parse(&role).unwrap_or(ProjectRole::Member),
+                updated_at: row.try_get("updated_at")?,
+            })
+        })
+        .collect::<Result<_, sqlx::Error>>()?;
+    Ok(Json(views))
+}
+
+/// An admin hands a project of a locked account to someone else: the only way an admin acts on
+/// a project they are not in (`project-access` spec). The new owner is added if needed.
+async fn hand_over(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+    Path((id, project_id)): Path<(String, String)>,
+    Json(body): Json<HandOverRequest>,
+) -> Result<Json<Vec<MemberView>>, ApiError> {
+    require_admin(&state, &principal)?;
+    let owner = users::get(&state.db, &id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such user"))?;
+    if members::role_of(&state.db, &project_id, &id).await? != Some(ProjectRole::Owner) {
+        return Err(ApiError::not_found(
+            "this account does not own that project",
+        ));
+    }
+    if !owner.disabled {
+        return Err(ApiError::conflict(
+            "owner_active",
+            "the owner can hand the project over themselves; an admin does it only for a locked account",
+        ));
+    }
+    let target = users::get(&state.db, &body.user_id)
+        .await?
+        .filter(|record| !record.disabled)
+        .ok_or_else(|| {
+            ApiError::bad_request("the new owner must be an account that is not locked")
+        })?;
+    let previous = set_owner(&state, &project_id, &target.user.id).await?;
+    let mut affected = vec![target.user.id];
+    affected.extend(previous);
+    announce(&state, &project_id, affected, Vec::new());
+    Ok(Json(members_of(&state, &project_id).await?))
 }

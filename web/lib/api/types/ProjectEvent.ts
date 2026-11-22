@@ -4,4 +4,4 @@ import type { CompileResult } from "./CompileResult";
 /**
  * Something the open workspace should react to.
  */
-export type ProjectEvent = { "type": "filesChanged", paths: Array<string>, } | { "type": "compileStarted", runId: string, } | { "type": "compileFinished", result: CompileResult, } | { "type": "historyChanged" } | { "type": "resync" };
+export type ProjectEvent = { "type": "filesChanged", paths: Array<string>, } | { "type": "compileStarted", runId: string, } | { "type": "compileFinished", result: CompileResult, } | { "type": "historyChanged" } | { "type": "membersChanged", } | { "type": "resync" };

@@ -14,6 +14,7 @@ use futures_util::{Stream, StreamExt};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
+use crate::auth::CurrentUser;
 use crate::db::now_ms;
 use crate::error::ApiError;
 use crate::events::AppEvent;
@@ -69,15 +70,20 @@ async fn remove(
 /// Server-sent events for every open page (`AppEvent` JSON): jobs changing state and progress.
 async fn events(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let stream = BroadcastStream::new(state.events.subscribe_app()).map(|item| {
+    let me = principal.user_id().map(str::to_owned);
+    let stream = BroadcastStream::new(state.events.subscribe_app()).filter_map(move |item| {
         let event = match item {
             Ok(event) => event,
             Err(BroadcastStreamRecvError::Lagged(_)) => AppEvent::Resync,
         };
-        Ok(Event::default()
-            .json_data(&event)
-            .unwrap_or_else(|_| Event::default().comment("unserialisable event")))
+        let sse = event.is_for(me.as_deref()).then(|| {
+            Ok(Event::default()
+                .json_data(&event)
+                .unwrap_or_else(|_| Event::default().comment("unserialisable event")))
+        });
+        std::future::ready(sse)
     });
     Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
 }

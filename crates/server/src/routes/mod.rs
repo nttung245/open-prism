@@ -18,6 +18,9 @@ mod imports;
 mod jobs;
 #[cfg(test)]
 mod jobs_tests;
+mod members;
+#[cfg(test)]
+mod members_tests;
 #[cfg(test)]
 mod pdf_import_tests;
 mod projects;
@@ -45,7 +48,8 @@ pub fn router(state: AppState) -> Router {
         .merge(ai::routes())
         .merge(jobs::routes())
         .merge(imports::routes())
-        .merge(users::routes());
+        .merge(users::routes())
+        .merge(members::routes());
 
     Router::new()
         .nest("/api", api)

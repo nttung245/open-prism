@@ -211,7 +211,7 @@ async fn use_link(
 
     let mut tx = state.db.begin().await?;
     // Checked again inside the transaction: the link may have been used in another tab.
-    let link = links::find(&mut *tx, &token, now)
+    let link = links::find(&mut tx, &token, now)
         .await?
         .ok_or_else(invalid_link)?;
     if !links::consume(&mut tx, &link.token_hash, now).await? {

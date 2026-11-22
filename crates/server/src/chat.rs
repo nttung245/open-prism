@@ -238,6 +238,20 @@ pub async fn delete_thread(state: &AppState, id: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
+/// Deletes the conversations `user_id` started in a project (they left it, or were removed),
+/// and returns their ids: the caller removes their images once the transaction commits.
+pub async fn delete_user_threads(
+    conn: &mut sqlx::SqliteConnection,
+    project_id: &str,
+    user_id: &str,
+) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar("DELETE FROM ai_threads WHERE project_id = ? AND user_id = ? RETURNING id")
+        .bind(project_id)
+        .bind(user_id)
+        .fetch_all(conn)
+        .await
+}
+
 async fn messages(state: &AppState, thread_id: &str) -> Result<Vec<StoredMessage>, ApiError> {
     let rows = sqlx::query(
         "SELECT id, message_json, created_at FROM ai_messages WHERE thread_id = ? ORDER BY id",
