@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
-import { type SubmitEvent, useState } from "react";
+import { type SubmitEvent, useId, useState } from "react";
 import { ApiError, apiFetch, apiJson } from "@/lib/api/client";
 import type { LinkInfo } from "@/lib/api/types/LinkInfo";
 import type { UseLinkRequest } from "@/lib/api/types/UseLinkRequest";
@@ -30,6 +30,8 @@ export function SetupForm() {
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  // Hints stay out of the labels, so a field's name is only its label.
+  const hint = useId();
   const submit = useMutation({
     mutationFn: (body: UseLinkRequest) =>
       apiFetch(path, {
@@ -118,19 +120,22 @@ export function SetupForm() {
                 className={INPUT}
               />
             </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="font-medium">Your name</span>
-              <input
-                name="displayName"
-                autoComplete="name"
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                className={INPUT}
-              />
-              <span className="text-xs text-muted">
+            <div className="flex flex-col gap-1 text-sm">
+              <label className="flex flex-col gap-1">
+                <span className="font-medium">Your name</span>
+                <input
+                  name="displayName"
+                  autoComplete="name"
+                  aria-describedby={`${hint}-name`}
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                  className={INPUT}
+                />
+              </label>
+              <span id={`${hint}-name`} className="text-xs text-muted">
                 Shown to others next to your changes.
               </span>
-            </label>
+            </div>
           </>
         )}
         {!firstAdmin && (
@@ -142,18 +147,23 @@ export function SetupForm() {
             value={link.data.username ?? ""}
           />
         )}
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium">Password</span>
-          <input
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className={INPUT}
-          />
-          <span className="text-xs text-muted">At least 12 characters.</span>
-        </label>
+        <div className="flex flex-col gap-1 text-sm">
+          <label className="flex flex-col gap-1">
+            <span className="font-medium">Password</span>
+            <input
+              name="password"
+              type="password"
+              autoComplete="new-password"
+              aria-describedby={`${hint}-password`}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className={INPUT}
+            />
+          </label>
+          <span id={`${hint}-password`} className="text-xs text-muted">
+            At least 12 characters.
+          </span>
+        </div>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium">Password again</span>
           <input

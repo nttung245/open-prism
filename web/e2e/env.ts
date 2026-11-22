@@ -17,3 +17,11 @@ export const API_URL = `http://127.0.0.1:${API_PORT}/api`;
 
 /** Fixed so the tests can sign in and call the API; only ever used for this throwaway run. */
 export const ACCESS_TOKEN = "e2e-access-token-0123456789abcdef0123456789";
+
+/** Server mode (`server-mode.spec.ts`): a second app with accounts, its own ports and data dir. */
+export const SERVER_WEB_PORT = port("E2E_SERVER_WEB_PORT", 3799);
+export const SERVER_API_PORT = port("E2E_SERVER_API_PORT", 8799);
+export const SERVER_WEB_URL = `http://127.0.0.1:${SERVER_WEB_PORT}`;
+export const SERVER_API_URL = `http://127.0.0.1:${SERVER_API_PORT}/api`;
+/** Its log, relative to `web/`: it prints the link that creates the first admin. */
+export const SERVER_LOG = "test-results/server-mode.log";

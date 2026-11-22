@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation } from "@tanstack/react-query";
-import { type SubmitEvent, useState } from "react";
+import { type SubmitEvent, useId, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { FIELD, Modal } from "@/components/ui/modal";
 import { apiFetch } from "@/lib/api/client";
@@ -19,6 +19,7 @@ export function ChangePasswordDialog({
   const [next, setNext] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [problem, setProblem] = useState<string | null>(null);
+  const hint = useId();
   const change = useMutation({
     mutationFn: (body: ChangePasswordRequest) =>
       apiFetch("/api/auth/password", {
@@ -71,18 +72,23 @@ export function ChangePasswordDialog({
               className={FIELD}
             />
           </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="font-medium">New password</span>
-            <input
-              type="password"
-              name="new-password"
-              autoComplete="new-password"
-              value={next}
-              onChange={(event) => setNext(event.target.value)}
-              className={FIELD}
-            />
-            <span className="text-xs text-muted">At least 12 characters.</span>
-          </label>
+          <div className="flex flex-col gap-1 text-sm">
+            <label className="flex flex-col gap-1">
+              <span className="font-medium">New password</span>
+              <input
+                type="password"
+                name="new-password"
+                autoComplete="new-password"
+                aria-describedby={hint}
+                value={next}
+                onChange={(event) => setNext(event.target.value)}
+                className={FIELD}
+              />
+            </label>
+            <span id={hint} className="text-xs text-muted">
+              At least 12 characters.
+            </span>
+          </div>
           <label className="flex flex-col gap-1 text-sm">
             <span className="font-medium">New password again</span>
             <input
