@@ -15,7 +15,7 @@ use crate::members::{self, ProjectRole};
 use crate::state::AppState;
 use crate::users::UserRole;
 
-fn send(method: Method, path: &str, cookie: &str, body: Option<Value>) -> Request<Body> {
+pub(super) fn send(method: Method, path: &str, cookie: &str, body: Option<Value>) -> Request<Body> {
     let request = Request::builder()
         .method(method)
         .uri(path)
@@ -64,13 +64,13 @@ fn error_code(reply: &Reply) -> &str {
 }
 
 /// An open event stream.
-struct Stream {
+pub(super) struct Stream {
     body: Body,
     buffer: String,
 }
 
 impl Stream {
-    async fn open(app: &Router, path: &str, cookie: &str) -> Self {
+    pub(super) async fn open(app: &Router, path: &str, cookie: &str) -> Self {
         let response = app.clone().oneshot(get(path, Some(cookie))).await.unwrap();
         assert_eq!(response.status(), StatusCode::OK, "{path}");
         Self {
@@ -81,7 +81,7 @@ impl Stream {
 
     /// The next event, or `None` once the stream has ended. Waits at most `wait`; `Err` when
     /// nothing came in that time.
-    async fn next(&mut self, wait: Duration) -> Result<Option<Value>, ()> {
+    pub(super) async fn next(&mut self, wait: Duration) -> Result<Option<Value>, ()> {
         loop {
             if let Some(end) = self.buffer.find("\n\n") {
                 let event: String = self.buffer.drain(..end + 2).collect();

@@ -14,7 +14,7 @@ use futures_util::{Stream, StreamExt};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 
-use crate::auth::CurrentUser;
+use crate::auth::{CurrentUser, Principal};
 use crate::db::now_ms;
 use crate::error::ApiError;
 use crate::events::AppEvent;
@@ -30,39 +30,63 @@ pub fn routes() -> Router<AppState> {
         .route("/events", get(events))
 }
 
-/// Queued and running jobs, and the ones that finished in the last 7 days; newest first.
-async fn list(State(state): State<AppState>) -> Result<Json<Vec<JobView>>, ApiError> {
-    Ok(Json(store::list(&state.db, now_ms()).await?))
+/// A job is its creator's alone: anyone else gets 404 (server mode). The access token reaches
+/// every job.
+async fn owned_job(state: &AppState, principal: &Principal, id: &str) -> Result<JobView, ApiError> {
+    let job = store::get(&state.db, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such job"))?;
+    match principal.user() {
+        Some(user) if job.user_id.as_deref() != Some(user.id.as_str()) => {
+            Err(ApiError::not_found("no such job"))
+        }
+        _ => Ok(job.view),
+    }
+}
+
+/// Queued and running jobs, and the ones that finished in the last 7 days; newest first. In
+/// server mode, the jobs of the signed-in account only.
+async fn list(
+    State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
+) -> Result<Json<Vec<JobView>>, ApiError> {
+    Ok(Json(
+        store::list(&state.db, now_ms(), principal.user_id()).await?,
+    ))
 }
 
 async fn show(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Json<JobView>, ApiError> {
-    store::view(&state.db, &id)
-        .await?
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found("no such job"))
+    Ok(Json(owned_job(&state, &principal, &id).await?))
 }
 
 async fn cancel(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Json<JobView>, ApiError> {
+    owned_job(&state, &principal, &id).await?;
     Ok(Json(jobs::cancel(&state, &id).await?))
 }
 
 async fn retry(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<Json<JobView>, ApiError> {
+    owned_job(&state, &principal, &id).await?;
     Ok(Json(jobs::retry(&state, &id).await?))
 }
 
 async fn remove(
     State(state): State<AppState>,
+    CurrentUser(principal): CurrentUser,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
+    owned_job(&state, &principal, &id).await?;
     jobs::delete(&state, &id).await?;
     Ok(StatusCode::NO_CONTENT)
 }

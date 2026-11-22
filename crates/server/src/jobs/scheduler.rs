@@ -196,9 +196,10 @@ pub async fn create(
         return Err(ApiError::internal(format!("unknown job kind {kind:?}")));
     }
     let job = store::create(&state.db, kind, title, params).await?;
-    state
-        .events
-        .publish_app(AppEvent::JobChanged { job: job.clone() });
+    state.events.publish_app(AppEvent::JobChanged {
+        job: job.clone(),
+        owner: None,
+    });
     state.jobs.wake.notify_one();
     Ok(job)
 }
@@ -238,9 +239,10 @@ where
     }
     tx.commit().await?;
     let job = view_or_404(state, &id).await?;
-    state
-        .events
-        .publish_app(AppEvent::JobChanged { job: job.clone() });
+    state.events.publish_app(AppEvent::JobChanged {
+        job: job.clone(),
+        owner: user_id.map(str::to_owned),
+    });
     state.jobs.wake.notify_one();
     Ok(job)
 }
@@ -282,6 +284,10 @@ pub async fn retry(state: &AppState, id: &str) -> Result<JobView, ApiError> {
 
 /// Deletes a finished job and its files.
 pub async fn delete(state: &AppState, id: &str) -> Result<(), ApiError> {
+    let owner = store::get(&state.db, id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("no such job"))?
+        .user_id;
     if !store::delete_finished(&state.db, id).await? {
         return Err(match store::view(&state.db, id).await? {
             None => ApiError::not_found("no such job"),
@@ -289,9 +295,10 @@ pub async fn delete(state: &AppState, id: &str) -> Result<(), ApiError> {
         });
     }
     super::remove_dir(&state.paths.job_dir(id)).await;
-    state
-        .events
-        .publish_app(AppEvent::JobRemoved { id: id.to_owned() });
+    state.events.publish_app(AppEvent::JobRemoved {
+        id: id.to_owned(),
+        owner,
+    });
     Ok(())
 }
 
@@ -303,8 +310,11 @@ async fn view_or_404(state: &AppState, id: &str) -> Result<JobView, ApiError> {
 
 /// Tells every open page about the job's new state.
 pub(super) async fn publish_changed(state: &AppState, id: &str) {
-    match store::view(&state.db, id).await {
-        Ok(Some(job)) => state.events.publish_app(AppEvent::JobChanged { job }),
+    match store::get(&state.db, id).await {
+        Ok(Some(row)) => state.events.publish_app(AppEvent::JobChanged {
+            job: row.view,
+            owner: row.user_id,
+        }),
         Ok(None) => {}
         Err(err) => tracing::warn!(%err, job = %id, "cannot read a job to publish it"),
     }

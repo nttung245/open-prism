@@ -135,6 +135,11 @@ async fn setup(page_bodies: &[&str]) -> Import {
 
 impl Import {
     async fn start(&self, pages: Vec<u32>, pdf_pages: u32) -> String {
+        self.start_as(None, pages, pdf_pages).await
+    }
+
+    /// Starts an import as `user_id` (server mode).
+    async fn start_as(&self, user_id: Option<&str>, pages: Vec<u32>, pdf_pages: u32) -> String {
         let params = PdfImportParams {
             name: "Imported".into(),
             file_name: "paper.pdf".into(),
@@ -144,7 +149,7 @@ impl Import {
         let bytes = pdf(pdf_pages);
         crate::jobs::create_prepared(
             &self.app.state,
-            None,
+            user_id,
             KIND,
             "Import paper.pdf",
             &serde_json::to_value(params).unwrap(),
@@ -243,6 +248,30 @@ async fn a_pdf_becomes_a_project() {
     .await;
     assert_eq!(compiled.state, JobState::Succeeded);
     assert_eq!(import.requests_with("first page of a PDF").await, 1);
+}
+
+#[tokio::test]
+async fn the_project_of_an_import_belongs_to_whoever_started_it() {
+    let import = setup(&["Some text.\n"]).await;
+    let minh = crate::users::create(
+        &import.app.state.db,
+        "minh",
+        "Minh",
+        crate::users::UserRole::User,
+        0,
+    )
+    .await
+    .unwrap();
+    let job = import.start_as(Some(&minh.id), vec![1], 1).await;
+    let done = finished(&import.app.state, &job).await;
+    assert_eq!(done.state, JobState::Succeeded, "{done:?}");
+    let project = done.project_id.unwrap();
+    assert_eq!(
+        crate::members::role_of(&import.app.state.db, &project, &minh.id)
+            .await
+            .unwrap(),
+        Some(crate::members::ProjectRole::Owner)
+    );
 }
 
 #[tokio::test]
@@ -454,7 +483,7 @@ mod route {
     }
 
     async fn no_jobs(app: &TestApp) -> bool {
-        crate::jobs::store::list(&app.state.db, crate::db::now_ms())
+        crate::jobs::store::list(&app.state.db, crate::db::now_ms(), None)
             .await
             .unwrap()
             .is_empty()

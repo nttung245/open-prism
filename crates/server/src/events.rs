@@ -52,9 +52,21 @@ pub enum ProjectEvent {
 #[ts(export)]
 pub enum AppEvent {
     /// A background job was created, changed state or finished a step.
-    JobChanged { job: JobView },
+    JobChanged {
+        job: JobView,
+        /// Who started the job; only their stream gets the event (server mode). Never sent.
+        #[serde(skip)]
+        #[ts(skip)]
+        owner: Option<String>,
+    },
     /// A finished background job was deleted.
-    JobRemoved { id: String },
+    JobRemoved {
+        id: String,
+        /// As for `JobChanged`. Never sent.
+        #[serde(skip)]
+        #[ts(skip)]
+        owner: Option<String>,
+    },
     /// The projects of some accounts changed (added to or removed from a project): reload the
     /// project list.
     ProjectsChanged {
@@ -76,13 +88,17 @@ impl ProjectEvent {
 
 impl AppEvent {
     /// Whether the stream of `user_id` gets this event (`None`: single-user mode and the access
-    /// token, which get everything).
+    /// token, which get everything). `Resync` carries nothing, so everyone gets it.
     pub fn is_for(&self, user_id: Option<&str>) -> bool {
-        match (self, user_id) {
-            (Self::ProjectsChanged { users }, Some(user_id)) => {
-                users.iter().any(|id| id == user_id)
+        let Some(user_id) = user_id else {
+            return true;
+        };
+        match self {
+            Self::JobChanged { owner, .. } | Self::JobRemoved { owner, .. } => {
+                owner.as_deref() == Some(user_id)
             }
-            _ => true,
+            Self::ProjectsChanged { users } => users.iter().any(|id| id == user_id),
+            Self::Resync => true,
         }
     }
 }

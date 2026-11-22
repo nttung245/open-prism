@@ -45,7 +45,7 @@ async fn lists_newest_first_without_old_finished_jobs() {
     finish_at(&state, &a.id, now - store::LIST_FINISHED_MS - 1000).await;
     finish_at(&state, &b.id, now - 1000).await;
 
-    let titles: Vec<_> = store::list(&state.db, now)
+    let titles: Vec<_> = store::list(&state.db, now, None)
         .await
         .unwrap()
         .into_iter()

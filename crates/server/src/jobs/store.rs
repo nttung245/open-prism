@@ -158,14 +158,21 @@ pub async fn view(db: &SqlitePool, id: &str) -> Result<Option<JobView>, sqlx::Er
     Ok(get(db, id).await?.map(|row| row.view))
 }
 
-/// Queued and running jobs, and jobs that finished in the last 7 days; newest first.
-pub async fn list(db: &SqlitePool, now: i64) -> Result<Vec<JobView>, sqlx::Error> {
+/// Queued and running jobs, and jobs that finished in the last 7 days; newest first. Only the
+/// jobs of `user_id`, or every job for `None` (single-user mode and the access token).
+pub async fn list(
+    db: &SqlitePool,
+    now: i64,
+    user_id: Option<&str>,
+) -> Result<Vec<JobView>, sqlx::Error> {
     let rows = sqlx::query(
         "SELECT * FROM jobs
-         WHERE state IN ('queued', 'running') OR finished_at >= ?
+         WHERE (state IN ('queued', 'running') OR finished_at >= ?1)
+           AND (?2 IS NULL OR user_id = ?2)
          ORDER BY created_at DESC, id DESC",
     )
     .bind(now - LIST_FINISHED_MS)
+    .bind(user_id)
     .fetch_all(db)
     .await?;
     rows.iter()

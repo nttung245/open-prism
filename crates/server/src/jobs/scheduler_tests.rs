@@ -567,7 +567,7 @@ async fn the_message_shows_and_cpu_work_shares_two_threads() {
     );
     let mut saw_planning = false;
     while let Ok(event) = events.try_recv() {
-        if let crate::events::AppEvent::JobChanged { job } = event {
+        if let crate::events::AppEvent::JobChanged { job, .. } = event {
             saw_planning |= job.message.as_deref() == Some("Planning");
         }
     }
@@ -623,7 +623,7 @@ async fn a_failed_preparation_leaves_no_job_and_no_directory() {
     .unwrap_err();
     assert_eq!(status(err), axum::http::StatusCode::BAD_REQUEST);
     assert!(
-        store::list(&state.db, crate::db::now_ms())
+        store::list(&state.db, crate::db::now_ms(), None)
             .await
             .unwrap()
             .is_empty()
