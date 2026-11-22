@@ -202,7 +202,7 @@ flowchart LR
 
 ## Project status
 
-Early releases (0.3.x):
+Early releases (0.4.x):
 - Prebuilt Linux packages and a multi-arch Docker image are published with every release.
 - macOS and Windows run through Docker; native builds there are not tested yet.
 - See the [roadmap](#roadmap) and the [releases](https://github.com/nttung245/open-prism/releases).
