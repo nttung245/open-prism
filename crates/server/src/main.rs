@@ -10,9 +10,12 @@ mod history;
 mod image_latex;
 mod images;
 mod jobs;
+mod links;
 mod mode;
+mod passwords;
 mod projects;
 mod routes;
+mod sessions;
 mod settings;
 mod state;
 mod synctex_cache;
@@ -90,10 +93,13 @@ async fn main() -> anyhow::Result<()> {
         && (web::port_in_use(args.port) || web::port_in_use(options.port))
         && web::is_open_prism(options.port).await
     {
-        let link = web::sign_in_link(
-            &format!("http://127.0.0.1:{}", options.port),
-            &sign_in_token,
-        );
+        let link = match mode.server() {
+            Some(server) => server.public_url.link("/login"),
+            None => web::sign_in_link(
+                &format!("http://127.0.0.1:{}", options.port),
+                &sign_in_token,
+            ),
+        };
         println!("\n  Open Prism is already running. Open this link to sign in:\n  {link}\n");
         web::open_in_browser(&link).await;
         return Ok(());
@@ -158,8 +164,12 @@ async fn serve(
     };
     tracing::info!(%addr, data_dir = %state.paths.root.display(), "open-prism-api listening");
 
+    let (link, message) = startup_link(&state, sign_in_token).await?;
     let (Some(options), Some(dir)) = (web_options, web_dir) else {
-        tracing::info!("sign in with the token from `open-prism-api print-token`");
+        match state.mode.server() {
+            Some(_) => tracing::info!(%link, "{message}"),
+            None => tracing::info!("sign in with the token from `open-prism-api print-token`"),
+        }
         axum::serve(listener, app)
             .with_graceful_shutdown(shutdown_signal())
             .await?;
@@ -176,8 +186,37 @@ async fn serve(
         );
     }
     let web = web::WebServer::next(options.node, dir, options.host, options.port, args.port);
-    let link = web::sign_in_link(&web.url(), sign_in_token);
-    run_with_web(listener, app, web, link, options.open).await
+    let link = match state.mode {
+        mode::Mode::Single => web::sign_in_link(&web.url(), sign_in_token),
+        mode::Mode::Server(_) => link,
+    };
+    run_with_web(listener, app, web, link, message, options.open).await
+}
+
+/// What to print once the web app is ready (`app-launch` spec): in single-user mode the
+/// sign-in link with the token; in server mode the first-admin link while there is no account,
+/// otherwise the sign-in page of the public address. Never the token in server mode.
+async fn startup_link(
+    state: &AppState,
+    sign_in_token: &str,
+) -> anyhow::Result<(String, &'static str)> {
+    let Some(server) = state.mode.server() else {
+        return Ok((
+            sign_in_token.to_owned(),
+            "Open Prism is running. Open this link to sign in:",
+        ));
+    };
+    match links::first_admin(&state.db, db::now_ms()).await? {
+        Some(token) => Ok((
+            server.public_url.link(&format!("/setup/{token}")),
+            "Open Prism is running in server mode with no account yet. Open this link to create \
+             the first admin (it works once, for 24 hours):",
+        )),
+        None => Ok((
+            server.public_url.link("/login"),
+            "Open Prism is running in server mode. Sign in at:",
+        )),
+    }
 }
 
 /// Serves the API with the web app next to it, until Ctrl+C / SIGTERM / SIGHUP or until one of
@@ -188,6 +227,7 @@ async fn run_with_web(
     app: axum::Router,
     web: web::WebServer,
     link: String,
+    message: &str,
     open: bool,
 ) -> anyhow::Result<()> {
     let api_stop = CancellationToken::new();
@@ -215,7 +255,7 @@ async fn run_with_web(
             result = &mut readied, if !announced => {
                 announced = true;
                 if result.is_ok() {
-                    println!("\n  Open Prism is running. Open this link to sign in:\n  {link}\n");
+                    println!("\n  {message}\n  {link}\n");
                     if open {
                         let link = link.clone();
                         tokio::spawn(async move { web::open_in_browser(&link).await });

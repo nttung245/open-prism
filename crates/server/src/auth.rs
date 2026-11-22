@@ -182,8 +182,13 @@ pub async fn identify(state: &AppState, jar: &CookieJar, headers: &HeaderMap) ->
             .token
             .verify_session(cookie.value())
             .then_some(Principal::Local),
-        // Account sessions come with password sign-in.
-        Mode::Server(_) => None,
+        Mode::Server(_) => crate::sessions::lookup(&state.db, cookie.value(), crate::db::now_ms())
+            .await
+            .unwrap_or_else(|err| {
+                tracing::warn!(%err, "cannot read the session");
+                None
+            })
+            .map(Principal::User),
     }
 }
 
