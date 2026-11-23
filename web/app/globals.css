@@ -19,7 +19,9 @@
   --cm-bracket: #52525b;
   --cm-string: #b45309;
   --cm-selection: #bfdbfe;
-  --cm-active-line: #f4f4f5;
+  /* Translucent: the selection is drawn under the lines, and an opaque line would hide it.
+     Over the background it looks like #f4f4f5 (#17171a when dark). */
+  --cm-active-line: rgb(24 24 27 / 0.045);
   --cm-gutter: #a1a1aa;
 }
 
@@ -42,7 +44,7 @@
     --cm-bracket: #a1a1aa;
     --cm-string: #fcd34d;
     --cm-selection: #1e3a5f;
-    --cm-active-line: #17171a;
+    --cm-active-line: rgb(236 236 239 / 0.055);
     --cm-gutter: #52525b;
   }
 }
