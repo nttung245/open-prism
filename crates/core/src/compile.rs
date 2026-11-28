@@ -100,8 +100,8 @@ const UNICODE_ENGINE_MARKERS: [&str; 5] = [
 ];
 
 /// Picks the engine for documents that do not say which one they need. `others` holds the
-/// other `.tex` files of the project (chapters, a shared preamble), read for the same signs
-/// as the main file except the magic comment.
+/// project's other sources (chapters, a shared preamble, its own classes and packages), read
+/// for the same signs as the main file except the magic comment.
 pub fn detect_program(main: &str, others: &[String]) -> Program {
     for line in main.lines().take(100) {
         let line = line.trim_start();
@@ -170,11 +170,15 @@ fn sets_up_vietnamese(code: &str) -> bool {
     })
 }
 
-/// Most `.tex` files besides the main one read by [`other_sources`], and their largest size.
+/// Most files besides the main one read by [`other_sources`], and their largest size.
 const MAX_OTHER_SOURCES: usize = 200;
 const MAX_OTHER_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 
-/// The project's other `.tex` files, for [`detect_program`].
+/// Extensions of the files [`other_sources`] reads: a class or package of the project is part
+/// of its preamble, like a `.tex` file it inputs (thesis templates set up fonts in their class).
+const SOURCE_EXTENSIONS: [&str; 3] = [".tex", ".cls", ".sty"];
+
+/// The project's other `.tex` files, and its own classes and packages, for [`detect_program`].
 fn other_sources(root: &Path, main: &RelPath) -> Vec<String> {
     let Ok(entries) = crate::files::list_tree(root) else {
         return Vec::new();
@@ -185,7 +189,10 @@ fn other_sources(root: &Path, main: &RelPath) -> Vec<String> {
             entry.kind == crate::files::EntryKind::File
                 && entry.size <= MAX_OTHER_SOURCE_BYTES
                 && entry.path != main.as_str()
-                && entry.path.to_ascii_lowercase().ends_with(".tex")
+                && {
+                    let path = entry.path.to_ascii_lowercase();
+                    SOURCE_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
+                }
         })
         .take(MAX_OTHER_SOURCES)
         .filter_map(|entry| std::fs::read(root.join(&entry.path)).ok())
@@ -387,7 +394,7 @@ async fn read_lossy(path: &Path) -> Option<String> {
 
 /// Picks the program and the toolchain that runs it. Docker is preferred over a native
 /// installation because it isolates the document from the host. `other_sources` are the
-/// project's other `.tex` files, read by [`detect_program`] for `Auto`.
+/// project's other sources, read by [`detect_program`] for `Auto`.
 pub fn choose_toolchain<'a>(
     requested: ProjectEngine,
     main_source: &str,
@@ -817,22 +824,42 @@ mod tests {
     }
 
     #[test]
-    fn other_sources_are_the_other_tex_files() {
+    fn other_sources_are_the_other_tex_files_classes_and_packages() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("chapters")).unwrap();
+        std::fs::create_dir_all(root.join("styles")).unwrap();
         std::fs::write(root.join("main.tex"), "main").unwrap();
         std::fs::write(root.join("chapters/intro.tex"), "Mở đầu").unwrap();
         std::fs::write(root.join("chapters/NOTES.TEX"), "notes").unwrap();
+        std::fs::write(root.join("thesis.cls"), "class").unwrap();
+        std::fs::write(root.join("styles/macros.sty"), "package").unwrap();
         std::fs::write(root.join("refs.bib"), "@book{x}").unwrap();
         std::fs::write(root.join("figure.png"), [0x89, 0x50]).unwrap();
 
         let mut found = other_sources(root, &RelPath::parse("main.tex").unwrap());
         found.sort();
-        assert_eq!(found, ["Mở đầu", "notes"]);
+        assert_eq!(found, ["Mở đầu", "class", "notes", "package"]);
         assert!(
             other_sources(&root.join("missing"), &RelPath::parse("main.tex").unwrap()).is_empty()
         );
+    }
+
+    #[test]
+    fn a_class_of_the_project_that_sets_up_vietnamese_keeps_pdflatex() {
+        // Thesis templates load T5 in their own class, not in main.tex.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let main = "\\documentclass{hcmuitthesis}\n\\title{Khóa luận tốt nghiệp}\n";
+        std::fs::write(root.join("main.tex"), main).unwrap();
+        std::fs::write(
+            root.join("hcmuitthesis.cls"),
+            "\\LoadClass{memoir}\n\\RequirePackage[T5]{fontenc}\n\\RequirePackage[utf8]{vietnam}\n",
+        )
+        .unwrap();
+
+        let others = other_sources(root, &RelPath::parse("main.tex").unwrap());
+        assert_eq!(detect_program(main, &others), Program::Pdflatex);
     }
 
     #[test]

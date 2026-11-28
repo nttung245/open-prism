@@ -431,9 +431,10 @@ after every save. Errors and warnings appear in the editor and in a Problems lis
 
 The engine is chosen automatically unless you pick one for the project:
 - A `% !TEX program = …` line wins.
-- Otherwise XeLaTeX is used when a `.tex` file of the project needs Unicode fonts (`fontspec`,
-  …), or has Vietnamese text without the T5 encoding (`\usepackage[T5]{fontenc}` or
-  `[vietnamese]{babel}`).
+- Otherwise XeLaTeX is used when the project needs Unicode fonts (`fontspec`, …), or has
+  Vietnamese text without the T5 encoding (`\usepackage[T5]{fontenc}` or
+  `[vietnamese]{babel}`). Its `.tex` files count, and so do its own classes and packages
+  (`.cls`, `.sty`), where thesis templates usually set up fonts.
 - Everything else uses pdfLaTeX.
 
 ### PDF preview
