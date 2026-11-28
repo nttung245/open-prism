@@ -200,6 +200,26 @@ fn other_sources(root: &Path, main: &RelPath) -> Vec<String> {
         .collect()
 }
 
+/// Recreates the folders of the project in the output directory. pdfLaTeX writes the `.aux`
+/// file of `\include{chapters/intro}` to `<outdir>/chapters/intro.aux` and fails when that
+/// folder is missing; latexmk then makes one missing folder per run and gives up after a few
+/// ("needed too many passes"), so a thesis split into folders failed its first compile.
+fn make_project_dirs(project_root: &Path, build_dir: &Path) -> std::io::Result<()> {
+    // A project too big to list just keeps latexmk's slower way.
+    let Ok(entries) = crate::files::list_tree(project_root) else {
+        return Ok(());
+    };
+    for entry in entries {
+        if entry.kind != crate::files::EntryKind::Dir {
+            continue;
+        }
+        if let Ok(folder) = RelPath::parse(&entry.path) {
+            std::fs::create_dir_all(folder.to_path(build_dir))?;
+        }
+    }
+    Ok(())
+}
+
 /// The part of a line before an unescaped `%`.
 fn strip_comment(line: &str) -> &str {
     let bytes = line.as_bytes();
@@ -319,6 +339,16 @@ pub async fn compile(
         if let Err(err) = tokio::fs::create_dir_all(dir).await {
             return failure(format!("cannot create {}: {err}", dir.display()));
         }
+    }
+    let (root, build_dir) = (job.project_root.clone(), job.build_dir.clone());
+    let folders = tokio::task::spawn_blocking(move || make_project_dirs(&root, &build_dir))
+        .await
+        .unwrap_or(Ok(()));
+    if let Err(err) = folders {
+        return failure(format!(
+            "cannot create the project's folders in {}: {err}",
+            job.build_dir.display()
+        ));
     }
     let invocation = match build_invocation(job, program, engine) {
         Ok(invocation) => invocation,
@@ -846,6 +876,30 @@ mod tests {
     }
 
     #[test]
+    fn the_output_directory_gets_the_folders_of_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let build = dir.path().join("build");
+        std::fs::create_dir_all(root.join("chapters/front")).unwrap();
+        std::fs::create_dir_all(root.join("chapters/main")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        std::fs::write(root.join("chapters/main/one.tex"), "one").unwrap();
+        std::fs::write(root.join("main.tex"), "main").unwrap();
+        std::fs::create_dir_all(&build).unwrap();
+
+        make_project_dirs(&root, &build).unwrap();
+
+        for folder in ["chapters", "chapters/front", "chapters/main", "empty"] {
+            assert!(build.join(folder).is_dir(), "{folder}");
+        }
+        // Only folders: no file is copied.
+        assert!(!build.join("main.tex").exists());
+        assert!(!build.join("chapters/main/one.tex").exists());
+        // A second run, with the folders already there, is fine.
+        make_project_dirs(&root, &build).unwrap();
+    }
+
+    #[test]
     fn a_class_of_the_project_that_sets_up_vietnamese_keeps_pdflatex() {
         // Thesis templates load T5 in their own class, not in main.tex.
         let dir = tempfile::tempdir().unwrap();
@@ -1145,6 +1199,54 @@ mod tests {
         let log = outcome.log.unwrap();
         assert!(log.contains("This is XeTeX"));
         assert!(!log.contains("Missing character"), "{log}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs Docker and the texlive/texlive image"]
+    async fn includes_from_many_folders_compile_on_the_first_run() {
+        let engine = docker_engine().await;
+        let dir = tempfile::tempdir().unwrap();
+        // Each `\include` in a folder of its own: pdfLaTeX writes its .aux file there.
+        let folders = [
+            "front",
+            "chapters/one",
+            "chapters/two",
+            "chapters/three",
+            "back",
+        ];
+        let includes: String = folders
+            .iter()
+            .map(|folder| format!("\\include{{{folder}/part}}\n"))
+            .collect();
+        let mut job = docker_job(
+            dir.path(),
+            "include",
+            &format!(
+                "\\documentclass{{report}}\n\\begin{{document}}\n\\tableofcontents\n\
+                 {includes}\\end{{document}}\n"
+            ),
+        );
+        for (index, folder) in folders.iter().enumerate() {
+            let path = job.project_root.join(folder);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(
+                path.join("part.tex"),
+                format!("\\chapter{{Part {index}}}\\label{{part{index}}}\nSee page \\pageref{{part0}}.\n"),
+            )
+            .unwrap();
+        }
+        // Several pdfLaTeX runs.
+        job.timeout = Duration::from_secs(60);
+
+        let outcome = compile(&job, &[engine], &CancellationToken::new()).await;
+
+        assert_eq!(
+            outcome.status,
+            CompileStatus::Success,
+            "{}",
+            outcome.console
+        );
+        assert!(outcome.has_pdf);
     }
 
     #[tokio::test]
