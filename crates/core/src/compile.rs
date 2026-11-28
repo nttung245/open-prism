@@ -100,8 +100,8 @@ const UNICODE_ENGINE_MARKERS: [&str; 5] = [
 ];
 
 /// Picks the engine for documents that do not say which one they need. `others` holds the
-/// other `.tex` files of the project (chapters, a shared preamble), read for the same signs
-/// as the main file except the magic comment.
+/// project's other sources (chapters, a shared preamble, its own classes and packages), read
+/// for the same signs as the main file except the magic comment.
 pub fn detect_program(main: &str, others: &[String]) -> Program {
     for line in main.lines().take(100) {
         let line = line.trim_start();
@@ -170,11 +170,15 @@ fn sets_up_vietnamese(code: &str) -> bool {
     })
 }
 
-/// Most `.tex` files besides the main one read by [`other_sources`], and their largest size.
+/// Most files besides the main one read by [`other_sources`], and their largest size.
 const MAX_OTHER_SOURCES: usize = 200;
 const MAX_OTHER_SOURCE_BYTES: u64 = 2 * 1024 * 1024;
 
-/// The project's other `.tex` files, for [`detect_program`].
+/// Extensions of the files [`other_sources`] reads: a class or package of the project is part
+/// of its preamble, like a `.tex` file it inputs (thesis templates set up fonts in their class).
+const SOURCE_EXTENSIONS: [&str; 3] = [".tex", ".cls", ".sty"];
+
+/// The project's other `.tex` files, and its own classes and packages, for [`detect_program`].
 fn other_sources(root: &Path, main: &RelPath) -> Vec<String> {
     let Ok(entries) = crate::files::list_tree(root) else {
         return Vec::new();
@@ -185,12 +189,35 @@ fn other_sources(root: &Path, main: &RelPath) -> Vec<String> {
             entry.kind == crate::files::EntryKind::File
                 && entry.size <= MAX_OTHER_SOURCE_BYTES
                 && entry.path != main.as_str()
-                && entry.path.to_ascii_lowercase().ends_with(".tex")
+                && {
+                    let path = entry.path.to_ascii_lowercase();
+                    SOURCE_EXTENSIONS.iter().any(|ext| path.ends_with(ext))
+                }
         })
         .take(MAX_OTHER_SOURCES)
         .filter_map(|entry| std::fs::read(root.join(&entry.path)).ok())
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .collect()
+}
+
+/// Recreates the folders of the project in the output directory. pdfLaTeX writes the `.aux`
+/// file of `\include{chapters/intro}` to `<outdir>/chapters/intro.aux` and fails when that
+/// folder is missing; latexmk then makes one missing folder per run and gives up after a few
+/// ("needed too many passes"), so a thesis split into folders failed its first compile.
+fn make_project_dirs(project_root: &Path, build_dir: &Path) -> std::io::Result<()> {
+    // A project too big to list just keeps latexmk's slower way.
+    let Ok(entries) = crate::files::list_tree(project_root) else {
+        return Ok(());
+    };
+    for entry in entries {
+        if entry.kind != crate::files::EntryKind::Dir {
+            continue;
+        }
+        if let Ok(folder) = RelPath::parse(&entry.path) {
+            std::fs::create_dir_all(folder.to_path(build_dir))?;
+        }
+    }
+    Ok(())
 }
 
 /// The part of a line before an unescaped `%`.
@@ -313,6 +340,16 @@ pub async fn compile(
             return failure(format!("cannot create {}: {err}", dir.display()));
         }
     }
+    let (root, build_dir) = (job.project_root.clone(), job.build_dir.clone());
+    let folders = tokio::task::spawn_blocking(move || make_project_dirs(&root, &build_dir))
+        .await
+        .unwrap_or(Ok(()));
+    if let Err(err) = folders {
+        return failure(format!(
+            "cannot create the project's folders in {}: {err}",
+            job.build_dir.display()
+        ));
+    }
     let invocation = match build_invocation(job, program, engine) {
         Ok(invocation) => invocation,
         Err(message) => return failure(message),
@@ -387,7 +424,7 @@ async fn read_lossy(path: &Path) -> Option<String> {
 
 /// Picks the program and the toolchain that runs it. Docker is preferred over a native
 /// installation because it isolates the document from the host. `other_sources` are the
-/// project's other `.tex` files, read by [`detect_program`] for `Auto`.
+/// project's other sources, read by [`detect_program`] for `Auto`.
 pub fn choose_toolchain<'a>(
     requested: ProjectEngine,
     main_source: &str,
@@ -817,22 +854,66 @@ mod tests {
     }
 
     #[test]
-    fn other_sources_are_the_other_tex_files() {
+    fn other_sources_are_the_other_tex_files_classes_and_packages() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
         std::fs::create_dir_all(root.join("chapters")).unwrap();
+        std::fs::create_dir_all(root.join("styles")).unwrap();
         std::fs::write(root.join("main.tex"), "main").unwrap();
         std::fs::write(root.join("chapters/intro.tex"), "Mở đầu").unwrap();
         std::fs::write(root.join("chapters/NOTES.TEX"), "notes").unwrap();
+        std::fs::write(root.join("thesis.cls"), "class").unwrap();
+        std::fs::write(root.join("styles/macros.sty"), "package").unwrap();
         std::fs::write(root.join("refs.bib"), "@book{x}").unwrap();
         std::fs::write(root.join("figure.png"), [0x89, 0x50]).unwrap();
 
         let mut found = other_sources(root, &RelPath::parse("main.tex").unwrap());
         found.sort();
-        assert_eq!(found, ["Mở đầu", "notes"]);
+        assert_eq!(found, ["Mở đầu", "class", "notes", "package"]);
         assert!(
             other_sources(&root.join("missing"), &RelPath::parse("main.tex").unwrap()).is_empty()
         );
+    }
+
+    #[test]
+    fn the_output_directory_gets_the_folders_of_the_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let build = dir.path().join("build");
+        std::fs::create_dir_all(root.join("chapters/front")).unwrap();
+        std::fs::create_dir_all(root.join("chapters/main")).unwrap();
+        std::fs::create_dir_all(root.join("empty")).unwrap();
+        std::fs::write(root.join("chapters/main/one.tex"), "one").unwrap();
+        std::fs::write(root.join("main.tex"), "main").unwrap();
+        std::fs::create_dir_all(&build).unwrap();
+
+        make_project_dirs(&root, &build).unwrap();
+
+        for folder in ["chapters", "chapters/front", "chapters/main", "empty"] {
+            assert!(build.join(folder).is_dir(), "{folder}");
+        }
+        // Only folders: no file is copied.
+        assert!(!build.join("main.tex").exists());
+        assert!(!build.join("chapters/main/one.tex").exists());
+        // A second run, with the folders already there, is fine.
+        make_project_dirs(&root, &build).unwrap();
+    }
+
+    #[test]
+    fn a_class_of_the_project_that_sets_up_vietnamese_keeps_pdflatex() {
+        // Thesis templates load T5 in their own class, not in main.tex.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let main = "\\documentclass{hcmuitthesis}\n\\title{Khóa luận tốt nghiệp}\n";
+        std::fs::write(root.join("main.tex"), main).unwrap();
+        std::fs::write(
+            root.join("hcmuitthesis.cls"),
+            "\\LoadClass{memoir}\n\\RequirePackage[T5]{fontenc}\n\\RequirePackage[utf8]{vietnam}\n",
+        )
+        .unwrap();
+
+        let others = other_sources(root, &RelPath::parse("main.tex").unwrap());
+        assert_eq!(detect_program(main, &others), Program::Pdflatex);
     }
 
     #[test]
@@ -1118,6 +1199,54 @@ mod tests {
         let log = outcome.log.unwrap();
         assert!(log.contains("This is XeTeX"));
         assert!(!log.contains("Missing character"), "{log}");
+    }
+
+    #[tokio::test]
+    #[ignore = "needs Docker and the texlive/texlive image"]
+    async fn includes_from_many_folders_compile_on_the_first_run() {
+        let engine = docker_engine().await;
+        let dir = tempfile::tempdir().unwrap();
+        // Each `\include` in a folder of its own: pdfLaTeX writes its .aux file there.
+        let folders = [
+            "front",
+            "chapters/one",
+            "chapters/two",
+            "chapters/three",
+            "back",
+        ];
+        let includes: String = folders
+            .iter()
+            .map(|folder| format!("\\include{{{folder}/part}}\n"))
+            .collect();
+        let mut job = docker_job(
+            dir.path(),
+            "include",
+            &format!(
+                "\\documentclass{{report}}\n\\begin{{document}}\n\\tableofcontents\n\
+                 {includes}\\end{{document}}\n"
+            ),
+        );
+        for (index, folder) in folders.iter().enumerate() {
+            let path = job.project_root.join(folder);
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(
+                path.join("part.tex"),
+                format!("\\chapter{{Part {index}}}\\label{{part{index}}}\nSee page \\pageref{{part0}}.\n"),
+            )
+            .unwrap();
+        }
+        // Several pdfLaTeX runs.
+        job.timeout = Duration::from_secs(60);
+
+        let outcome = compile(&job, &[engine], &CancellationToken::new()).await;
+
+        assert_eq!(
+            outcome.status,
+            CompileStatus::Success,
+            "{}",
+            outcome.console
+        );
+        assert!(outcome.has_pdf);
     }
 
     #[tokio::test]
